@@ -42,16 +42,20 @@ variable "agent_enabled" {
 variable "specs" {
   description = "CPU, Mem settings per VM."
   type        = object({
-    cores     = number
-    sockets   = number
-    memory    = number
-    disk_size = string
+    cores        = number
+    sockets      = number
+    memory       = number
+    disk_size    = string
+    disk_storage = string
+    disk_type    = string
   })
   default = {
-    cores     = 1
-    sockets   = 1
-    memory    = 2048
-    disk_size = "30G"
+    cores        = 1
+    sockets      = 1
+    memory       = 2048
+    disk_size    = "30G"
+    disk_storage = "local-lvm"
+    disk_type    = "virtio"
   }
 }
 
