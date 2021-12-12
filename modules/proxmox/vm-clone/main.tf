@@ -33,6 +33,8 @@ resource "proxmox_vm_qemu" "vm" {
   boot        = "order=virtio0;ide2;net0"
   bootdisk    = "virtio0"
   agent       = var.agent_enabled
+  onboot      = var.onboot
+  oncreate    = var.oncreate
 
   clone = var.clone
   full_clone = var.full_clone

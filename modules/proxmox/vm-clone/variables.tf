@@ -64,3 +64,15 @@ variable "tags" {
   type        = string
   default     = null
 }
+
+variable "onboot" {
+  description = "Whether to have the VM startup after the PVE node starts."
+  type        = bool
+  default     = true
+}
+
+variable "oncreate" {
+  description = "Whether to have the VM startup after the VM is created."
+  type        = bool
+  default     = true
+}
