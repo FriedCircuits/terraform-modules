@@ -6,3 +6,5 @@ Hodgepodge of Terraform modules.
 
 * K8S
     * Get Join (Get join config from Kuberenetes control plane)
+    * K8s-At-Home (Deploy a chart from the k8s-at-home helm repo)
+    * Traefik Ingress (Creats Ingress CRDs for host based routing)
