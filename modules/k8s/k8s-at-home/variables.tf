@@ -31,6 +31,42 @@ variable "timezone" {
   default     = "US/Pacific"
 }
 
+variable "persistence" {
+  description = "Configure persistence volume on this deployment."
+  type        = map(string)
+  default     = {}
+  # Map of keys under the persistance.config value. See: https://github.com/k8s-at-home/library-charts/tree/main/charts/stable/common
+# Example
+# persistence = {
+#   mountPath    = "/config"
+#   size         = "20Gi"
+#   storageClass = "nfs-client"
+# }
+}
+
+variable "ingress" {
+  description = "Configure ingress on this deployment."
+  type        = any
+  default     = {}
+  # Map of keys under the ingress.main value. See: https://github.com/k8s-at-home/library-charts/tree/main/charts/stable/common
+# Example
+# ingress = {
+#   hosts = [{
+#     host = "domain.example.com"
+#     paths = [{
+#       path = "/"
+#     }]
+#   }]
+# }
+}
+
+variable "ingress_annotations" {
+  description = "Configure ingress annotations on this deployment."
+  type        = map(string)
+  default     = {}
+  # Map of keys under the ingress.main.annotations value. See: https://github.com/k8s-at-home/library-charts/tree/main/charts/stable/common
+}
+
 variable "helm_envs" {
   description = "Map of envs for helm chart. Merged with timezone."
   type        = any
