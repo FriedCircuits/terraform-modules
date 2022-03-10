@@ -9,3 +9,6 @@ Hodgepodge of Terraform modules.
     * K8s-At-Home     - Deploy a chart from the k8s-at-home helm repo
     * Traefik Ingress - Creats Ingress CRDs for host based routing
     * Helm Chart      - Deploy any helm chart
+
+* JumpCloud
+   * Users and Groups - Manage users and group membership
