@@ -15,6 +15,12 @@ variable "namespace" {
   default     = "default"
 }
 
+variable "extra_namespaces" {
+  description = "Extra Kubernetes Namespaces to create."
+  type        = list(string)
+  default     = []
+}
+
 variable "helm_repo" {
   description = "Helm chart repo URL."
   type        = string

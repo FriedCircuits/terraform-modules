@@ -5,6 +5,13 @@ resource "kubernetes_namespace" "namespace" {
   }
 }
 
+resource "kubernetes_namespace" "namespaces" {
+  for_each = toset(var.extra_namespaces)
+  metadata {
+    name = each.value
+  }
+}
+
 locals {
   values = yamlencode(
     merge(var.persistence != {} ? tomap({
