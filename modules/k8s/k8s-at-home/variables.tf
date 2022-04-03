@@ -33,15 +33,15 @@ variable "timezone" {
 
 variable "persistence" {
   description = "Configure persistence volume on this deployment."
-  type        = map(string)
+  type        = any
   default     = {}
   # Map of keys under the persistance.config value. See: https://github.com/k8s-at-home/library-charts/tree/main/charts/stable/common
-# Example
-# persistence = {
-#   mountPath    = "/config"
-#   size         = "20Gi"
-#   storageClass = "nfs-client"
-# }
+  # Example
+  # persistence = {
+  #   mountPath    = "/config"
+  #   size         = "20Gi"
+  #   storageClass = "nfs-client"
+  # }
 }
 
 variable "ingress" {
@@ -49,15 +49,15 @@ variable "ingress" {
   type        = any
   default     = {}
   # Map of keys under the ingress.main value. See: https://github.com/k8s-at-home/library-charts/tree/main/charts/stable/common
-# Example
-# ingress = {
-#   hosts = [{
-#     host = "domain.example.com"
-#     paths = [{
-#       path = "/"
-#     }]
-#   }]
-# }
+  # Example
+  # ingress = {
+  #   hosts = [{
+  #     host = "domain.example.com"
+  #     paths = [{
+  #       path = "/"
+  #     }]
+  #   }]
+  # }
 }
 
 variable "ingress_annotations" {
