@@ -19,8 +19,8 @@ resource "jumpcloud_user_group" "groups" {
 }
 
 locals {
-  group_matrix = [ for user in keys(var.users) :
-    setproduct([jumpcloud_user.users[user].id], [for group in var.users[user].groups : jumpcloud_user_group.groups[group].id] )
+  group_matrix = [for user in keys(var.users) :
+    setproduct([jumpcloud_user.users[user].id], [for group in var.users[user].groups : jumpcloud_user_group.groups[group].id])
   ]
   group_flat = flatten([
     for sets in local.group_matrix : [
@@ -33,7 +33,7 @@ locals {
 }
 
 resource "jumpcloud_user_group_membership" "members" {
-  for_each = { for index, set in local.group_flat: index => set }
+  for_each = { for index, set in local.group_flat : "${set.group}/${set.user}" => set }
   user_id  = each.value.user
   group_id = each.value.group
 }
