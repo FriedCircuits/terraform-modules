@@ -1,6 +1,6 @@
 variable "pve_connection" {
   description = "Connection info for PVE host."
-  type        = object({
+  type = object({
     node        = string
     host        = string
     ssh_user    = string
@@ -15,7 +15,7 @@ variable "clone" {
 
 variable "vm" {
   description = "Name of VM to deploy."
-  type        = object({
+  type = object({
     name        = string
     description = string
   })
@@ -41,7 +41,7 @@ variable "agent_enabled" {
 
 variable "specs" {
   description = "CPU, Mem settings per VM."
-  type        = object({
+  type = object({
     cores        = number
     sockets      = number
     memory       = number
@@ -57,6 +57,16 @@ variable "specs" {
     disk_storage = "local-lvm"
     disk_type    = "virtio"
   }
+}
+
+variable "extra_disks" {
+  description = "Add extra disk to create and attach to the VM."
+  type = list(object({
+    storage = string
+    type    = string
+    size    = string
+  }))
+  default = []
 }
 
 variable "tags" {

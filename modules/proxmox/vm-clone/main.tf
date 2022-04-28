@@ -2,7 +2,7 @@ terraform {
   required_version = ">= 1.0"
   required_providers {
     proxmox = {
-      source = "Telmate/proxmox"
+      source  = "Telmate/proxmox"
       version = "~>2.9"
     }
   }
@@ -14,10 +14,10 @@ resource "null_resource" "cloud_init" {
   }
 
   connection {
-    type    = "ssh"
-    user    = var.pve_connection.ssh_user
+    type        = "ssh"
+    user        = var.pve_connection.ssh_user
     private_key = var.pve_connection.private_key
-    host    = var.pve_connection.host
+    host        = var.pve_connection.host
   }
 
   provisioner "file" {
@@ -36,26 +36,35 @@ resource "proxmox_vm_qemu" "vm" {
   onboot      = var.onboot
   oncreate    = var.oncreate
 
-  clone = var.clone
+  clone      = var.clone
   full_clone = var.full_clone
 
   disk {
-    slot = 0
+    slot    = 0
     storage = var.specs.disk_storage
-    type = var.specs.disk_type
-    size = var.specs.disk_size
+    type    = var.specs.disk_type
+    size    = var.specs.disk_size
   }
 
-  cores = var.specs.cores
+  dynamic "disk" {
+    for_each = var.extra_disks != null ? var.extra_disks : []
+    content {
+      storage = disk.value["storage"]
+      type    = disk.value["type"]
+      size    = disk.value["size"]
+    }
+  }
+
+  cores   = var.specs.cores
   sockets = var.specs.sockets
-  memory = var.specs.memory
+  memory  = var.specs.memory
 
   network {
-    model = "virtio"
+    model  = "virtio"
     bridge = "vmbr0"
   }
 
-  os_type = "cloud-init"
+  os_type   = "cloud-init"
   ipconfig0 = "ip=dhcp"
 
   cicustom = "user=local:snippets/cloud_init_${var.vm.name}.yml"
