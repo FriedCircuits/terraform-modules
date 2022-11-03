@@ -1,6 +1,9 @@
 # Terraform Modules
 Hodgepodge of Terraform modules.
 
+* Github
+   * Actions Secrets - Deploys secrets to Github Actions. (AWS IAM User option)
+
 * Proxmox
    * VM Clone (Create VMs from Templates (created by packer))
 
