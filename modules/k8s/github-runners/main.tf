@@ -78,6 +78,44 @@ module "github" {
   ]
 }
 
+resource "kubernetes_service_account" "github" {
+  count = var.enable_service_account == true ? 1 : 0
+  metadata {
+    name      = var.service_account_name
+    namespace = var.namespace
+  }
+}
+
+resource "kubernetes_cluster_role" "github" {
+  count = var.enable_service_account == true ? 1 : 0
+  metadata {
+    name = var.service_account_name
+  }
+
+  rule {
+    api_groups = ["", "apps", "networking.k8s.io", "extensions"]
+    resources  = ["deployments", "services", "configmaps", "secrets", "ingresses"]
+    verbs      = ["get", "watch", "list", "patch", "update", "delete"]
+  }
+}
+
+resource "kubernetes_cluster_role_binding" "github" {
+  count = var.enable_service_account == true ? 1 : 0
+  metadata {
+    name = var.service_account_name
+  }
+  subject {
+    kind      = "ServiceAccount"
+    name      = var.service_account_name
+    namespace = var.namespace
+  }
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "ClusterRole"
+    name      = var.service_account_name
+  }
+}
+
 resource "kubernetes_manifest" "runner" {
   for_each = { for repo in var.repos : repo.repo => repo }
   manifest = {
@@ -90,7 +128,9 @@ resource "kubernetes_manifest" "runner" {
     spec = {
       template = {
         spec = {
-          repository = each.value.repo
+          repository                   = each.value.repo
+          serviceAccountName           = var.service_account_name
+          automountServiceAccountToken = var.enable_service_account
         }
       }
     }
