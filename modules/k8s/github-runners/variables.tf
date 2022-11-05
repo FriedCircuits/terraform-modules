@@ -30,3 +30,15 @@ variable "repos" {
   }))
   default = []
 }
+
+variable "enable_service_account" {
+  description = "Enable creation of service account for github runner."
+  type        = bool
+  default     = true
+}
+
+variable "service_account_name" {
+  description = "Name of kuberbets service account for Github runner pod."
+  type        = string
+  default     = "actions-runner"
+}
