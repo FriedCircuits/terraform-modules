@@ -40,14 +40,12 @@ variable "persistence" {
   description = "Configure persistence volume on this deployment."
   type        = any
   default     = {}
-# Example
 }
 
 variable "ingress" {
   description = "Configure ingress on this deployment."
   type        = any
   default     = {}
-# Example
 }
 
 variable "ingress_annotations" {

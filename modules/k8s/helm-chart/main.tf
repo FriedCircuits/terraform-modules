@@ -16,15 +16,15 @@ locals {
   values = yamlencode(
     merge(var.persistence != {} ? tomap({
       persistence = merge({
-         enabled = true
-       },
-       var.persistence)
+        enabled = true
+        },
+      var.persistence)
       }) : {}, var.ingress != {} ? tomap({
       ingress = merge({
-         enabled = true
-       }, tomap({
-       annotations = var.ingress_annotations}),
-       var.ingress)
+        enabled = true
+        }, tomap({
+        annotations = var.ingress_annotations }),
+      var.ingress)
       }) : {},
       var.helm_envs,
       var.helm_values

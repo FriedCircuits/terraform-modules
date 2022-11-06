@@ -10,25 +10,25 @@ locals {
     merge(tomap({
       env = merge({
         TZ = var.timezone,
-      },
+        },
       var.helm_envs)
-    }),
-    tomap({
-      persistence = {
-       config = merge({
-         enabled = var.persistence != {} ? true : false
-       },
-       var.persistence)}
-    }),
-    tomap({
-      ingress = {
-       main = merge({
-         enabled = var.ingress != {} ? true : false
-       }, tomap({
-       annotations = var.ingress_annotations}),
-       var.ingress)}
-    }),
-    var.helm_values
+      }),
+      tomap({
+        persistence = {
+          config = merge({
+            enabled = var.persistence != {} ? true : false
+            },
+        var.persistence) }
+      }),
+      tomap({
+        ingress = {
+          main = merge({
+            enabled = var.ingress != {} ? true : false
+            }, tomap({
+            annotations = var.ingress_annotations }),
+        var.ingress) }
+      }),
+      var.helm_values
     )
   )
 }
