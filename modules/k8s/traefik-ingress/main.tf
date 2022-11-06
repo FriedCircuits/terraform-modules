@@ -1,15 +1,15 @@
 resource "helm_release" "k8s" {
-  name       = "${var.name}-traefik-ingress"
-  chart      = "${path.module}/traefik-ingress"
-  namespace  = var.namespace
+  name      = "${var.name}-traefik-ingress"
+  chart     = "${path.module}/traefik-ingress"
+  namespace = var.namespace
 
   set {
     name  = "namespace"
     value = var.namespace
   }
   set {
-     name  = "name"
-     value = var.name
+    name  = "name"
+    value = var.name
   }
   set {
     name  = "certResolver"
