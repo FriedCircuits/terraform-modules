@@ -94,7 +94,7 @@ resource "kubernetes_cluster_role" "github" {
 
   rule {
     api_groups = ["", "apps", "networking.k8s.io", "extensions"]
-    resources  = ["deployments", "services", "configmaps", "secrets", "ingresses"]
+    resources  = ["deployments", "services", "configmaps", "secrets", "ingresses", "namespaces"]
     verbs      = ["get", "watch", "list", "patch", "update", "delete"]
   }
 }
