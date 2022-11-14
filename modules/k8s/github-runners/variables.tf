@@ -42,3 +42,17 @@ variable "service_account_name" {
   type        = string
   default     = "actions-runner"
 }
+
+variable "role_permissions" {
+  description = "Set cluster role permissions for runners."
+  type = object({
+    api_groups = list(string)
+    resources  = list(string)
+    verbs      = list(string)
+  })
+  default = {
+    api_groups = ["", "apps", "networking.k8s.io", "extensions"]
+    resources  = ["deployments", "services", "configmaps", "secrets", "ingresses", "namespaces"]
+    verbs      = ["get", "watch", "list", "patch", "update", "delete"]
+  }
+}
