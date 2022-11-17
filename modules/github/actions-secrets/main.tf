@@ -88,3 +88,22 @@ resource "aws_iam_user_policy" "github" {
 
   policy = data.aws_iam_policy_document.github[0].json
 }
+
+resource "aws_iam_user_policy" "custom" {
+  count = var.create_aws_iam_user == true ? 1 : 0
+  name  = "custom-policies"
+  user  = aws_iam_user.github[0].name
+
+  policy = data.aws_iam_policy_document.custom[0].json
+}
+data "aws_iam_policy_document" "custom" {
+  count = var.create_aws_iam_user == true ? 1 : 0
+  dynamic "statement" {
+    for_each = { for statement in var.aws_iam_custom_policies : statement.sid => statement }
+    content {
+      sid       = statement.value.sid
+      actions   = statement.value.actions
+      resources = statement.value.resources
+    }
+  }
+}
