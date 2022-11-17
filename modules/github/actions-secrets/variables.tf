@@ -35,8 +35,8 @@ variable "aws_iam_user_name" {
 variable "aws_iam_custom_policies" {
   description = "Extra policy statements to add to IAM user."
   type = list(object({
-    action = list(string)
-    resources = list(strings)
+    action    = list(string)
+    resources = list(string)
   }))
   default = []
 }
