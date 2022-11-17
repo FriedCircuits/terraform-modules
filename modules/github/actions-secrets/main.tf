@@ -99,7 +99,7 @@ resource "aws_iam_user_policy" "custom" {
 data "aws_iam_policy_document" "custom" {
   count = var.create_aws_iam_user == true ? 1 : 0
   dynamic "statement" {
-    for_each = var.custom_policies
+    for_each = var.aws_iam_custom_policies
     content {
       actions   = each.value.actions
       resources = each.value.resources
