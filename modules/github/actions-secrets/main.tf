@@ -101,9 +101,9 @@ data "aws_iam_policy_document" "custom" {
   dynamic "statement" {
     for_each = { for statement in var.aws_iam_custom_policies : statement.sid => statement }
     content {
-      sid       = each.value.sid
-      actions   = each.value.actions
-      resources = each.value.resources
+      sid       = statement.value.sid
+      actions   = statement.value.actions
+      resources = statement.value.resources
     }
   }
 }
