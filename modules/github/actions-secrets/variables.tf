@@ -32,6 +32,15 @@ variable "aws_iam_user_name" {
   default     = "github-terraform-backend"
 }
 
+variable "aws_iam_custom_policies" {
+  description = "Extra policy statements to add to IAM user."
+  type = list(object({
+    action = list(string)
+    resources = list(strings)
+  }))
+  default = []
+}
+
 variable "terraform_bucket_name" {
   description = "Terraform backend bucket name for IAM policy."
   type        = string
