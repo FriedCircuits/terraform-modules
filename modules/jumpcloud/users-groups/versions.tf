@@ -3,8 +3,8 @@ terraform {
 
   required_providers {
     jumpcloud = {
-      source  = "sagewave/jumpcloud"
-      version = "~> 0.3"
+      source  = "Paynetworx/jumpcloud"
+      version = "0.2.21"
     }
   }
 }
