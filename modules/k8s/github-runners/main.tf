@@ -122,7 +122,7 @@ resource "kubernetes_manifest" "runner" {
     apiVersion = "actions.summerwind.dev/v1alpha1"
     kind       = "RunnerDeployment"
     metadata = {
-      name      = "runner-deployment"
+      name      = "runner-deployment-${replace(each.value.repo, "/", "-")}"
       namespace = var.namespace
     }
     spec = {
@@ -143,7 +143,7 @@ resource "kubernetes_manifest" "runner_autoscaler" {
     apiVersion = "actions.summerwind.dev/v1alpha1"
     kind       = "HorizontalRunnerAutoscaler"
     metadata = {
-      name      = "runner-deployment-autoscaler"
+      name      = "runner-deployment-autoscaler-${replace(each.value.repo, "/", "-")}"
       namespace = var.namespace
     }
     spec = {
