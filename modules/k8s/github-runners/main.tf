@@ -16,7 +16,7 @@ resource "kubernetes_secret" "github" {
 }
 
 module "cert_manager" {
-  source = "git::git@github.com:friedcircuits/terraform-modules.git//modules/k8s/helm-chart?ref=v0.0.15"
+  source = "../helm-chart"
 
   helm_repo        = "https://charts.jetstack.io/"
   name             = "cert-manager"
@@ -45,7 +45,7 @@ module "cert_manager" {
 }
 
 module "github" {
-  source = "git::git@github.com:friedcircuits/terraform-modules.git//modules/k8s/helm-chart?ref=v0.0.15"
+  source = "../helm-chart"
 
   helm_repo        = "https://actions-runner-controller.github.io/actions-runner-controller"
   name             = "actions-runner-controller"
