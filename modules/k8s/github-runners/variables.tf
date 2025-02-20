@@ -16,6 +16,12 @@ variable "github_chart_version" {
   default     = "0.21.0"
 }
 
+variable "github_extra_helm_values" {
+  description = "Additional helm values to pass to the github runner chart."
+  type        = map(string)
+  default     = null
+}
+
 variable "github_token" {
   description = "Github token with repo access."
   type        = string

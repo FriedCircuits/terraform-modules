@@ -47,15 +47,15 @@ module "cert_manager" {
 module "github" {
   source = "../helm-chart"
 
-  helm_repo        = "https://actions-runner-controller.github.io/actions-runner-controller"
-  name             = "actions-runner-controller"
-  chart            = "actions-runner-controller"
+  helm_repo        = "oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set"
+  name             = "arc-runner-set"
+  chart            = "arc-runner-set"
   namespace        = var.namespace
   create_namespace = false
   chart_version    = var.github_chart_version
 
 
-  helm_values = {
+  helm_values = merge(var.github_extra_helm_values, {
     authSecret = {
       create = false
       name   = "github-token"
@@ -70,7 +70,7 @@ module "github" {
         memory = "128Mi"
       }
     }
-  }
+  })
 
   depends_on = [
     kubernetes_namespace.namespace,
