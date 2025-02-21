@@ -15,18 +15,17 @@ resource "kubernetes_secret" "github" {
   type = "Opaque"
 }
 
-module "cert_manager" {
+module "github_controller" {
   source = "../helm-chart"
 
-  helm_repo        = "https://charts.jetstack.io/"
-  name             = "cert-manager"
-  chart            = "cert-manager"
+  helm_repo        = "oci://ghcr.io/actions/actions-runner-controller-charts"
+  name             = "arc"
+  chart            = "gha-runner-scale-set-controller"
   namespace        = var.namespace
   create_namespace = false
-  chart_version    = var.cert_chart_verison
+  chart_version    = var.github_chart_version
 
-  helm_values = {
-    installCRDs = true
+  helm_values = merge(var.github_extra_helm_values, {
     resources = {
       limits = {
         cpu    = "100m"
@@ -37,29 +36,29 @@ module "cert_manager" {
         memory = "128Mi"
       }
     }
-  }
+  })
 
   depends_on = [
-    kubernetes_namespace.namespace,
+    kubernetes_namespace.namespace
   ]
 }
 
-module "github" {
-  source = "../helm-chart"
+module "github_runner" {
+  for_each = { for repo in var.repos : repo.repo => repo }
+  source   = "../helm-chart"
 
-  helm_repo        = "oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set"
-  name             = "arc-runner-set"
-  chart            = "arc-runner-set"
+  helm_repo        = "oci://ghcr.io/actions/actions-runner-controller-charts"
+  name             = "${split("/", each.value.repo)[3]}-${split("/", each.value.repo)[4]}"
+  chart            = "gha-runner-scale-set"
   namespace        = var.namespace
   create_namespace = false
   chart_version    = var.github_chart_version
 
-
   helm_values = merge(var.github_extra_helm_values, {
-    authSecret = {
-      create = false
-      name   = "github-token"
-    }
+    githubConfigUrl    = each.value.repo
+    githubConfigSecret = "github-token"
+    maxRunners         = each.value.max
+    minRunners         = each.value.min
     resources = {
       limits = {
         cpu    = "100m"
@@ -74,90 +73,6 @@ module "github" {
 
   depends_on = [
     kubernetes_namespace.namespace,
-    module.cert_manager
+    module.github_controller
   ]
-}
-
-resource "kubernetes_service_account" "github" {
-  count = var.enable_service_account == true ? 1 : 0
-  metadata {
-    name      = var.service_account_name
-    namespace = var.namespace
-  }
-}
-
-resource "kubernetes_cluster_role" "github" {
-  count = var.enable_service_account == true ? 1 : 0
-  metadata {
-    name = var.service_account_name
-  }
-
-  rule {
-    api_groups = var.role_permissions.api_groups
-    resources  = var.role_permissions.resources
-    verbs      = var.role_permissions.verbs
-  }
-}
-
-resource "kubernetes_cluster_role_binding" "github" {
-  count = var.enable_service_account == true ? 1 : 0
-  metadata {
-    name = var.service_account_name
-  }
-  subject {
-    kind      = "ServiceAccount"
-    name      = var.service_account_name
-    namespace = var.namespace
-  }
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "ClusterRole"
-    name      = var.service_account_name
-  }
-}
-
-resource "kubernetes_manifest" "runner" {
-  for_each = { for repo in var.repos : repo.repo => repo }
-  manifest = {
-    apiVersion = "actions.summerwind.dev/v1alpha1"
-    kind       = "RunnerDeployment"
-    metadata = {
-      name      = "runner-deployment-${replace(each.value.repo, "/", "-")}"
-      namespace = var.namespace
-    }
-    spec = {
-      template = {
-        spec = {
-          repository                   = each.value.repo
-          serviceAccountName           = var.service_account_name
-          automountServiceAccountToken = var.enable_service_account
-        }
-      }
-    }
-  }
-}
-
-resource "kubernetes_manifest" "runner_autoscaler" {
-  for_each = { for repo in var.repos : repo.repo => repo }
-  manifest = {
-    apiVersion = "actions.summerwind.dev/v1alpha1"
-    kind       = "HorizontalRunnerAutoscaler"
-    metadata = {
-      name      = "runner-deployment-autoscaler-${replace(each.value.repo, "/", "-")}"
-      namespace = var.namespace
-    }
-    spec = {
-      scaleTargetRef = {
-        name = "runner-deployment"
-      }
-      minReplicas = each.value.min
-      maxReplicas = each.value.max
-      metrics = [{
-        type = "TotalNumberOfQueuedAndInProgressWorkflowRuns"
-        repositoryNames = [
-          each.value.repo
-        ]
-      }]
-    }
-  }
 }
