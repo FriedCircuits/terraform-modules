@@ -25,7 +25,7 @@ module "github_controller" {
   create_namespace = false
   chart_version    = var.github_chart_version
 
-  helm_values = merge(var.github_extra_helm_values, {
+  helm_values = merge(var.github_controller_extra_helm_values, {
     resources = {
       limits = {
         cpu    = "100m"
@@ -54,7 +54,7 @@ module "github_runner" {
   create_namespace = false
   chart_version    = var.github_chart_version
 
-  helm_values = merge(var.github_extra_helm_values, {
+  helm_values = merge(var.github_runner_extra_helm_values, {
     githubConfigUrl    = each.value.repo
     githubConfigSecret = "github-token"
     maxRunners         = each.value.max

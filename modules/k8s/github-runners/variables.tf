@@ -16,9 +16,15 @@ variable "github_chart_version" {
   default     = "0.21.0"
 }
 
-variable "github_extra_helm_values" {
+variable "github_controller_extra_helm_values" {
   description = "Additional helm values to pass to the github runner chart."
-  type        = map(any)
+  type        = any
+  default     = null
+}
+
+variable "github_runner_extra_helm_values" {
+  description = "Additional helm values to pass to the github runner chart."
+  type        = any
   default     = null
 }
 
