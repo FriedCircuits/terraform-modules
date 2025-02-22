@@ -21,6 +21,18 @@ variable "extra_namespaces" {
   default     = []
 }
 
+variable "secret_name" {
+  description = "The name of the Kubernetes secret"
+  type        = string
+  default     = ""
+}
+
+variable "secret_data" {
+  description = "The data for the Kubernetes secret"
+  type        = map(string)
+  default     = {}
+}
+
 variable "helm_repo" {
   description = "Helm chart repo URL."
   type        = string
