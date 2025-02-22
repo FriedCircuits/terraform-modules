@@ -32,6 +32,16 @@ locals {
   )
 }
 
+resource "kubernetes_secret" "custom_secret" {
+  count = length(var.secret_data) > 0 ? 1 : 0
+  metadata {
+    name      = var.secret_name
+    namespace = var.namespace
+  }
+  data = var.secret_data
+  type = "Opaque"
+}
+
 resource "helm_release" "k8s" {
   repository = var.helm_repo
   name       = var.name
@@ -45,5 +55,6 @@ resource "helm_release" "k8s" {
 
   depends_on = [
     kubernetes_namespace.namespace,
+    kubernetes_secret.custom_secret
   ]
 }
