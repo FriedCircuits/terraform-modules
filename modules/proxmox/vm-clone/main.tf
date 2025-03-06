@@ -3,7 +3,7 @@ terraform {
   required_providers {
     proxmox = {
       source  = "Telmate/proxmox"
-      version = "~>2.9"
+      version = ">= 3.0.1-rc6"
     }
   }
 }
@@ -30,28 +30,24 @@ resource "proxmox_vm_qemu" "vm" {
   name        = var.vm.name
   desc        = var.vm.description
   target_node = var.pve_connection.node
-  boot        = "order=virtio0;ide2;net0"
-  bootdisk    = "virtio0"
+  boot        = var.boot
   agent       = var.agent_enabled
   onboot      = var.onboot
-  oncreate    = var.oncreate
+  vm_state    = var.vm_state
+
+  bios = var.specs.bios
 
   clone      = var.clone
   full_clone = var.full_clone
 
-  disk {
-    slot    = 0
-    storage = var.specs.disk_storage
-    type    = var.specs.disk_type
-    size    = var.specs.disk_size
-  }
-
   dynamic "disk" {
-    for_each = var.extra_disks != null ? var.extra_disks : []
+    for_each = var.disks != null ? var.disks : []
     content {
       storage = disk.value["storage"]
       type    = disk.value["type"]
+      format  = disk.value["format"]
       size    = disk.value["size"]
+      slot    = disk.value["slot"]
     }
   }
 
@@ -60,6 +56,7 @@ resource "proxmox_vm_qemu" "vm" {
   memory  = var.specs.memory
 
   network {
+    id     = 0
     model  = "virtio"
     bridge = "vmbr0"
   }
