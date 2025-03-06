@@ -39,32 +39,36 @@ variable "agent_enabled" {
   default     = 1
 }
 
+variable "boot" {
+  description = "Boot order."
+  type        = string
+  default     = "order=virtio0;scsi0;net0"
+}
+
 variable "specs" {
   description = "CPU, Mem settings per VM."
   type = object({
-    cores        = number
-    sockets      = number
-    memory       = number
-    disk_size    = string
-    disk_storage = string
-    disk_type    = string
+    cores   = number
+    sockets = number
+    memory  = number
+    bios    = string
   })
   default = {
-    cores        = 1
-    sockets      = 1
-    memory       = 2048
-    disk_size    = "30G"
-    disk_storage = "local-lvm"
-    disk_type    = "virtio"
+    cores   = 1
+    sockets = 1
+    memory  = 2048
+    bios    = "seabios"
   }
 }
 
-variable "extra_disks" {
-  description = "Add extra disk to create and attach to the VM."
+variable "disks" {
+  description = "Add extra disk to create and attach to the VM. Should be ordered by slot to keep idempotence."
   type = list(object({
     storage = string
     type    = string
-    size    = string
+    format  = optional(string)
+    size    = optional(string)
+    slot    = string
   }))
   default = []
 }
@@ -81,8 +85,8 @@ variable "onboot" {
   default     = true
 }
 
-variable "oncreate" {
-  description = "Whether to have the VM startup after the VM is created."
-  type        = bool
-  default     = true
+variable "vm_state" {
+  description = "The desired state of the VM after creatation."
+  type        = string
+  default     = "running"
 }

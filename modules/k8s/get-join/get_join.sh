@@ -4,7 +4,7 @@ set -e
 eval "$(jq -r '@sh "k8s_host=\(.hostname) ssh_user=\(.ssh_user)"')"
 
 out=$(ssh -q ${ssh_user}@${k8s_host} <<'EOF'
-kubeadm token create --print-join-command
+sudo kubeadm token create --print-join-command
 EOF
 )
 
