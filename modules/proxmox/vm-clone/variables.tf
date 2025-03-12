@@ -64,11 +64,14 @@ variable "specs" {
 variable "disks" {
   description = "Add extra disk to create and attach to the VM. Should be ordered by slot to keep idempotence."
   type = list(object({
-    storage = string
-    type    = string
-    format  = optional(string)
-    size    = optional(string)
-    slot    = string
+    storage    = string
+    type       = string
+    format     = optional(string)
+    size       = optional(string)
+    slot       = string
+    emulatessd = optional(bool)
+    discard    = optional(bool)
+    iothread   = optional(bool)
   }))
   default = []
 }
