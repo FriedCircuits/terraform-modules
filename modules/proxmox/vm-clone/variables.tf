@@ -76,6 +76,18 @@ variable "disks" {
   default = []
 }
 
+variable "usb" {
+  description = "Add extra usb device to create and attach to the VM."
+  type = list(object({
+    id         = string
+    device_id  = optional(string)
+    mapping_id = optional(string)
+    port_id    = optional(string)
+    usb3       = optional(bool)
+  }))
+  default = []
+}
+
 variable "tags" {
   description = "Comma delimited strings to pass as tags to the vm. Note not visable in the UI."
   type        = string
