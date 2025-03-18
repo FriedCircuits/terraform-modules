@@ -54,6 +54,17 @@ resource "proxmox_vm_qemu" "vm" {
     }
   }
 
+  dynamic "usb" {
+    for_each = var.usb != null ? var.usb : []
+    content {
+      id         = usb.value["id"]
+      device_id  = usb.value["device_id"]
+      mapping_id = usb.value["mapping_id"]
+      port_id    = usb.value["port_id"]
+      usb3       = usb.value["usb3"]
+    }
+  }
+
   cores   = var.specs.cores
   sockets = var.specs.sockets
   memory  = var.specs.memory
