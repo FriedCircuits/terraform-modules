@@ -5,7 +5,8 @@ Hodgepodge of Terraform modules.
    * Actions Secrets - Deploys secrets to Github Actions. (AWS IAM User option)
 
 * Proxmox
-   * VM Clone (Create VMs from Templates (created by packer))
+   * VM Clone (Create VMs from templates created by packer)
+   * VM (Create VM with cloud-init and auto download ISO)
 
 * K8S
     * Get Join        - Get join config from Kuberenetes control plane
