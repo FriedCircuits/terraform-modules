@@ -21,6 +21,18 @@ variable "extra_namespaces" {
   default     = []
 }
 
+variable "namespace_labels" {
+  description = "Labels to apply to the namespace when create_namespace is enabled."
+  type        = map(string)
+  default     = {}
+}
+
+variable "extra_namespace_labels" {
+  description = "Labels to apply to each extra namespace, keyed by namespace name."
+  type        = map(map(string))
+  default     = {}
+}
+
 variable "secret_name" {
   description = "The name of the Kubernetes secret"
   type        = string
