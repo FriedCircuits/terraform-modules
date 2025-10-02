@@ -1,14 +1,16 @@
 resource "kubernetes_namespace" "namespace" {
   count = var.create_namespace ? 1 : 0
   metadata {
-    name = var.namespace
+    name   = var.namespace
+    labels = var.namespace_labels
   }
 }
 
 resource "kubernetes_namespace" "namespaces" {
   for_each = toset(var.extra_namespaces)
   metadata {
-    name = each.value
+    name   = each.value
+    labels = lookup(var.extra_namespace_labels, each.value, {})
   }
 }
 

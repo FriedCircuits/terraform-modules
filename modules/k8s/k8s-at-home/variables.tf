@@ -15,6 +15,24 @@ variable "namespace" {
   default     = "default"
 }
 
+variable "extra_namespaces" {
+  description = "Extra Kubernetes Namespaces to create."
+  type        = list(string)
+  default     = []
+}
+
+variable "namespace_labels" {
+  description = "Labels to apply to the namespace when create_namespace is enabled."
+  type        = map(string)
+  default     = {}
+}
+
+variable "extra_namespace_labels" {
+  description = "Labels to apply to each extra namespace, keyed by namespace name."
+  type        = map(map(string))
+  default     = {}
+}
+
 variable "name" {
   description = "Name of chart deployment."
   type        = string
