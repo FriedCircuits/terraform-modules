@@ -63,7 +63,11 @@ variable "instances" {
   }
   validation {
     condition = alltrue([
-      for inst in var.instances : !(coalesce(try(inst.skip_iso_download, null), var.default_skip_iso_download, false) && coalesce(try(inst.existing_iso_file_id, null), var.default_existing_iso_file_id, null) == null)
+      for inst in var.instances : !(
+        coalesce(try(inst.skip_iso_download, null), var.default_skip_iso_download, false)
+        && try(inst.existing_iso_file_id, null) == null
+        && var.default_existing_iso_file_id == null
+      )
     ])
     error_message = "When skip_iso_download is true you must provide an existing ISO file ID either per instance or via the module default."
   }

@@ -8,6 +8,21 @@ locals {
   instance_user_data_provided = {
     for key, inst in var.instances : key => inst.cloud_init != null && try(inst.cloud_init.user_data, null) != null
   }
+  instance_iso_settings = {
+    for key, inst in var.instances : key => {
+      skip = coalesce(try(inst.skip_iso_download, null), var.default_skip_iso_download, false)
+      iso_file_id = try(
+        element(
+          compact([
+            try(inst.existing_iso_file_id, null),
+            var.default_existing_iso_file_id
+          ]),
+          0
+        ),
+        null
+      )
+    }
+  }
 }
 
 locals {
@@ -23,21 +38,21 @@ locals {
       iso_storage          = coalesce(try(inst.iso_storage, null), var.default_iso_storage)
       disk_storage         = coalesce(try(inst.disk_storage, null), var.default_disk_storage)
       disk_interface       = coalesce(try(inst.disk_interface, null), var.default_disk_interface)
-      skip_iso_download    = coalesce(try(inst.skip_iso_download, null), var.default_skip_iso_download, false)
-      existing_iso_file_id = coalesce(try(inst.existing_iso_file_id, null), var.default_existing_iso_file_id, null)
+      skip_iso_download    = local.instance_iso_settings[key].skip
+      existing_iso_file_id = local.instance_iso_settings[key].iso_file_id
       vm_specs             = try(inst.vm_specs, null) != null ? inst.vm_specs : var.default_vm_specs
       proxmox_network      = merge(var.default_proxmox_network, try(inst.proxmox_network, {}))
       tags                 = coalesce(try(inst.tags, null), var.default_tags)
       enable_rng           = coalesce(try(inst.enable_rng, null), var.default_enable_rng)
       additional_disks     = coalesce(try(inst.additional_disks, null), [])
       usb_devices          = coalesce(try(inst.usb_devices, null), [])
-      iso_download = coalesce(try(inst.skip_iso_download, null), var.default_skip_iso_download, false) ? null : {
+      iso_download = local.instance_iso_settings[key].skip ? null : {
         datastore_id = coalesce(try(inst.iso_storage, null), var.default_iso_storage)
         url          = inst.iso_url
         file_name    = basename(inst.iso_url)
         overwrite    = true
       }
-      iso_file_id = coalesce(try(inst.skip_iso_download, null), var.default_skip_iso_download, false) ? coalesce(try(inst.existing_iso_file_id, null), var.default_existing_iso_file_id) : null
+      iso_file_id = local.instance_iso_settings[key].skip ? local.instance_iso_settings[key].iso_file_id : null
       cloud_init = inst.cloud_init == null ? null : merge(
         {
           datastore_id = coalesce(
