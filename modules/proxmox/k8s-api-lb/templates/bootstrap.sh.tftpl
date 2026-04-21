@@ -1,0 +1,85 @@
+#!/bin/sh
+set -eu
+
+export DEBIAN_FRONTEND=noninteractive
+
+haproxy_unit="${haproxy_service}.service"
+case "${haproxy_service}" in
+  *.service) haproxy_unit="${haproxy_service}" ;;
+esac
+
+policy_rc_d_path="/usr/sbin/policy-rc.d"
+policy_rc_d_created=0
+
+cleanup() {
+  if [ "$${policy_rc_d_created}" -eq 1 ]; then
+    rm -f "$${policy_rc_d_path}"
+  fi
+}
+
+trap cleanup EXIT
+
+package_installed() {
+  dpkg-query -W -f='$${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'
+}
+
+if ! package_installed haproxy || ! package_installed keepalived; then
+  if [ ! -e "$${policy_rc_d_path}" ]; then
+    cat <<'POLICY_RC_D_EOF' >"$${policy_rc_d_path}"
+#!/bin/sh
+exit 101
+POLICY_RC_D_EOF
+    chmod 0755 "$${policy_rc_d_path}"
+    policy_rc_d_created=1
+  fi
+
+  apt-get update
+  apt-get install -y --no-install-recommends haproxy keepalived
+fi
+
+install -d -m 0755 /etc/haproxy /etc/keepalived
+
+cat <<'HAPROXY_EOF' >/etc/haproxy/haproxy.cfg
+${haproxy_config}
+HAPROXY_EOF
+
+cat <<'KEEPALIVED_EOF' >/etc/keepalived/keepalived.conf
+${keepalived_config}
+KEEPALIVED_EOF
+
+cat <<'HAPROXY_UNIT_EOF' >"/etc/systemd/system/$${haproxy_unit}"
+[Unit]
+Description=HAProxy Load Balancer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/haproxy -db -f /etc/haproxy/haproxy.cfg -p /run/haproxy.pid
+ExecReload=/usr/sbin/haproxy -c -f /etc/haproxy/haproxy.cfg
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target
+HAPROXY_UNIT_EOF
+
+chmod 0644 /etc/haproxy/haproxy.cfg /etc/keepalived/keepalived.conf "/etc/systemd/system/$${haproxy_unit}"
+
+systemctl daemon-reload
+systemctl reset-failed ${haproxy_service} ${keepalived_service} || true
+systemctl enable ${haproxy_service} ${keepalived_service}
+haproxy -c -f /etc/haproxy/haproxy.cfg
+keepalived --config-test --use-file /etc/keepalived/keepalived.conf
+
+if ! systemctl restart ${haproxy_service}; then
+  systemctl --no-pager --full status ${haproxy_service} || true
+  journalctl --no-pager -u ${haproxy_service} -n 50 || true
+  exit 1
+fi
+
+if ! systemctl restart ${keepalived_service}; then
+  systemctl --no-pager --full status ${keepalived_service} || true
+  journalctl --no-pager -u ${keepalived_service} -n 50 || true
+  exit 1
+fi
