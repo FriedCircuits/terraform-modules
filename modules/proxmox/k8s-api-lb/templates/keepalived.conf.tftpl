@@ -1,0 +1,41 @@
+global_defs {
+    enable_script_security
+    script_user root
+}
+
+vrrp_script chk_haproxy {
+    script "/usr/bin/systemctl is-active --quiet ${haproxy_service}"
+    user root
+    interval 2
+    fall 2
+    rise 2
+}
+
+vrrp_instance VI_1 {
+    state ${state}
+    interface ${interface}
+    virtual_router_id ${virtual_router_id}
+    priority ${priority}
+    advert_int ${advert_int}
+
+    authentication {
+        auth_type PASS
+        auth_pass ${auth_pass}
+    }
+
+    unicast_src_ip ${instance_ip}
+
+    unicast_peer {
+%{ for peer in peers ~}
+        ${peer}
+%{ endfor ~}
+    }
+
+    virtual_ipaddress {
+        ${vip_address}
+    }
+
+    track_script {
+        chk_haproxy
+    }
+}

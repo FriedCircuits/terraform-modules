@@ -1,0 +1,36 @@
+global
+    maxconn 2048
+
+defaults
+    mode tcp
+    option dontlognull
+    timeout connect 10s
+    timeout client 1m
+    timeout server 1m
+    retries 3
+
+frontend k8s_api
+    bind *:${frontend_port}
+    default_backend k8s_controlplane
+
+backend k8s_controlplane
+    mode tcp
+    balance ${balance_algorithm}
+    option tcp-check
+%{ for backend in backends ~}
+    server ${replace(backend.name, ".", "-")} ${backend.ip}:${backend.port} check inter ${health_check_interval} fall ${health_check_fall} rise ${health_check_rise}
+%{ endfor ~}
+
+%{ if talos_api_enabled ~}
+frontend talos_api
+    bind *:${talos_frontend_port}
+    default_backend talos_controlplane
+
+backend talos_controlplane
+    mode tcp
+    balance ${balance_algorithm}
+    option tcp-check
+%{ for backend in talos_backends ~}
+    server ${replace(backend.name, ".", "-")}-talos ${backend.ip}:${backend.port} check inter ${health_check_interval} fall ${health_check_fall} rise ${health_check_rise}
+%{ endfor ~}
+%{ endif ~}
