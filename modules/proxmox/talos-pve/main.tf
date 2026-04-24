@@ -45,6 +45,7 @@ locals {
       tags                 = coalesce(try(inst.tags, null), var.default_tags)
       enable_rng           = coalesce(try(inst.enable_rng, null), var.default_enable_rng)
       additional_disks     = coalesce(try(inst.additional_disks, null), [])
+      passthrough_disks    = coalesce(try(inst.passthrough_disks, null), [])
       usb_devices          = coalesce(try(inst.usb_devices, null), [])
       iso_download = local.instance_iso_settings[key].skip ? null : {
         datastore_id = coalesce(try(inst.iso_storage, null), var.default_iso_storage)
@@ -104,15 +105,16 @@ module "proxmox_vm" {
   node        = each.value.proxmox_node
   vm_id       = each.value.vm_id
 
-  vm_specs         = each.value.vm_specs
-  disk_storage     = each.value.disk_storage
-  disk_interface   = each.value.disk_interface
-  iso_download     = each.value.iso_download
-  iso_file_id      = each.value.iso_file_id
-  network          = each.value.proxmox_network
-  tags             = each.value.tags
-  enable_rng       = each.value.enable_rng
-  cloud_init       = each.value.cloud_init
-  additional_disks = each.value.additional_disks
-  usb_devices      = each.value.usb_devices
+  vm_specs          = each.value.vm_specs
+  disk_storage      = each.value.disk_storage
+  disk_interface    = each.value.disk_interface
+  iso_download      = each.value.iso_download
+  iso_file_id       = each.value.iso_file_id
+  network           = each.value.proxmox_network
+  tags              = each.value.tags
+  enable_rng        = each.value.enable_rng
+  cloud_init        = each.value.cloud_init
+  additional_disks  = each.value.additional_disks
+  passthrough_disks = each.value.passthrough_disks
+  usb_devices       = each.value.usb_devices
 }

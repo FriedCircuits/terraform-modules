@@ -63,8 +63,6 @@ module "talos_control_plane" {
 }
 ```
 
-```
-
 To reuse an ISO that was already uploaded (for example, by the control-plane deployment) set `skip_iso_download = true` and provide `existing_iso_file_id` with the file ID you want to attach:
 
 ```hcl
@@ -85,9 +83,34 @@ instances = {
 
 You can also enforce this behaviour for every instance by setting `default_skip_iso_download = true` and supplying `default_existing_iso_file_id` (individual instances can still override either value).
 
+To attach a host block device directly to a VM, use `passthrough_disks` with a stable `/dev/disk/by-id/...` path from the target Proxmox node:
+
+```hcl
+instances = {
+  cp03 = {
+    proxmox_node = "pve3"
+    vm_id        = 1103
+    iso_url      = "https://factory.talos.dev/image/.../nocloud-amd64.iso"
+
+    passthrough_disks = [
+      {
+        interface         = "scsi1"
+        path_in_datastore = "/dev/disk/by-id/ata-ST2000DM008-2FR102_ZFL12345"
+        file_format       = "raw"
+        discard           = "on"
+        ssd               = false
+        iothread          = true
+      }
+    ]
+  }
+}
+```
+
+Use passthrough only for disks physically attached to the same Proxmox node as the VM. Proxmox datastores such as `k8s` are storage abstractions, not device IDs, so you need the underlying host block-device path instead of the datastore name.
+
 ## Inputs (selected)
 
-- `instances` – Map of control plane nodes to create (name, target node, ISO URL, optional overrides, disk interface, BIOS type, optional reuse of existing ISO file IDs, extra disks, USB pass-through, cloud-init payloads, etc.).
+- `instances` – Map of control plane nodes to create (name, target node, ISO URL, optional overrides, disk interface, BIOS type, optional reuse of existing ISO file IDs, extra disks, passthrough disks, USB pass-through, cloud-init payloads, etc.).
 - `default_skip_iso_download`, `default_existing_iso_file_id` – module-wide defaults for reusing an already-uploaded ISO when per-instance values are omitted.
 - `default_vm_specs`, `default_disk_storage`, `default_disk_interface`, `default_iso_storage`, `default_proxmox_network`, `default_tags`, `default_enable_rng`, `default_description_prefix` – baseline settings applied when an instance omits a value (including `bios_type` when set).
 - `pve_connection` – Proxmox API connection details (node, endpoint, and credentials).

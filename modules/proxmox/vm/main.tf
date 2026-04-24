@@ -122,6 +122,24 @@ resource "proxmox_virtual_environment_vm" "this" {
     }
   }
 
+  dynamic "disk" {
+    for_each = var.passthrough_disks
+    content {
+      datastore_id      = ""
+      interface         = disk.value.interface
+      path_in_datastore = disk.value.path_in_datastore
+      file_format       = coalesce(try(disk.value.file_format, null), "raw")
+      discard           = coalesce(try(disk.value.discard, null), var.disk_discard)
+      ssd               = coalesce(try(disk.value.ssd, null), var.disk_ssd)
+      cache             = try(disk.value.cache, null)
+      backup            = try(disk.value.backup, null)
+      aio               = try(disk.value.aio, null)
+      iothread          = try(disk.value.iothread, null)
+      replicate         = try(disk.value.replicate, null)
+      serial            = try(disk.value.serial, null)
+    }
+  }
+
   dynamic "cdrom" {
     for_each = local.iso_file_id == null ? [] : [local.iso_file_id]
     content {
