@@ -45,9 +45,9 @@ variable "machine_type" {
 }
 
 variable "boot_order" {
-  description = "Boot order for the VM."
+  description = "Optional explicit boot order for the VM. When omitted, the module boots from the configured primary disk interface first and falls back to the attached ISO if needed."
   type        = list(string)
-  default     = ["ide2", "scsi0"]
+  default     = null
 }
 
 variable "agent_enabled" {
