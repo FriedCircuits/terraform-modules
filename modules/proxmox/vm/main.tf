@@ -7,6 +7,10 @@ locals {
     checksum_algorithm = null
   }, { for key, value in var.iso_download : key => value if value != null }) : null
   iso_file_id = var.iso_file_id != null ? var.iso_file_id : (local.iso_download_enabled ? proxmox_virtual_environment_download_file.iso[0].id : null)
+  boot_order = var.boot_order != null ? var.boot_order : compact([
+    var.disk_interface,
+    local.iso_file_id != null ? var.iso_interface : null,
+  ])
 
   sanitized_name = replace(var.name, ".", "-")
 }
@@ -79,7 +83,7 @@ resource "proxmox_virtual_environment_vm" "this" {
   stop_on_destroy = var.stop_on_destroy
   scsi_hardware   = var.scsi_hardware
   machine         = var.machine_type
-  boot_order      = var.boot_order
+  boot_order      = local.boot_order
   bios            = try(var.vm_specs.bios_type, null)
 
   agent {
@@ -119,6 +123,24 @@ resource "proxmox_virtual_environment_vm" "this" {
       iothread     = try(disk.value.iothread, null)
       replicate    = try(disk.value.replicate, null)
       serial       = try(disk.value.serial, null)
+    }
+  }
+
+  dynamic "disk" {
+    for_each = var.passthrough_disks
+    content {
+      datastore_id      = ""
+      interface         = disk.value.interface
+      path_in_datastore = disk.value.path_in_datastore
+      file_format       = coalesce(try(disk.value.file_format, null), "raw")
+      discard           = coalesce(try(disk.value.discard, null), var.disk_discard)
+      ssd               = coalesce(try(disk.value.ssd, null), var.disk_ssd)
+      cache             = try(disk.value.cache, null)
+      backup            = try(disk.value.backup, null)
+      aio               = try(disk.value.aio, null)
+      iothread          = try(disk.value.iothread, null)
+      replicate         = try(disk.value.replicate, null)
+      serial            = try(disk.value.serial, null)
     }
   }
 

@@ -40,6 +40,19 @@ variable "instances" {
       replicate    = optional(bool)
       serial       = optional(string)
     })))
+    passthrough_disks = optional(list(object({
+      interface         = string
+      path_in_datastore = string
+      file_format       = optional(string)
+      discard           = optional(string)
+      ssd               = optional(bool)
+      cache             = optional(string)
+      backup            = optional(bool)
+      aio               = optional(string)
+      iothread          = optional(bool)
+      replicate         = optional(bool)
+      serial            = optional(string)
+    })))
     usb_devices = optional(list(object({
       host    = optional(string)
       mapping = optional(string)

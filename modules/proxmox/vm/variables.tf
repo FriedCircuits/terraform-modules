@@ -45,9 +45,9 @@ variable "machine_type" {
 }
 
 variable "boot_order" {
-  description = "Boot order for the VM."
+  description = "Optional explicit boot order for the VM. When omitted, the module boots from the configured primary disk interface first and falls back to the attached ISO if needed."
   type        = list(string)
-  default     = ["ide2", "scsi0"]
+  default     = null
 }
 
 variable "agent_enabled" {
@@ -105,6 +105,24 @@ variable "additional_disks" {
     iothread     = optional(bool)
     replicate    = optional(bool)
     serial       = optional(string)
+  }))
+  default = []
+}
+
+variable "passthrough_disks" {
+  description = "Optional list of host block devices to attach directly to the VM."
+  type = list(object({
+    interface         = string
+    path_in_datastore = string
+    file_format       = optional(string)
+    discard           = optional(string)
+    ssd               = optional(bool)
+    cache             = optional(string)
+    backup            = optional(bool)
+    aio               = optional(string)
+    iothread          = optional(bool)
+    replicate         = optional(bool)
+    serial            = optional(string)
   }))
   default = []
 }
