@@ -1,0 +1,14 @@
+[Unit]
+Description=External shutdown controller recovery helper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=${env_file}
+ExecStart=${recovery_path}
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

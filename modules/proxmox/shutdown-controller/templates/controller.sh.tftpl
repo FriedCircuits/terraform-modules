@@ -1,0 +1,799 @@
+#!/bin/sh
+set -eu
+
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+
+STATE_DIR="/run/shutdown-controller"
+DRY_RUN="${DRY_RUN:-true}"
+POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-15}"
+STATUS_LOG_INTERVAL_SECONDS="${STATUS_LOG_INTERVAL_SECONDS:-0}"
+NOOUT_MIN_RUNTIME_SECONDS="${NOOUT_MIN_RUNTIME_SECONDS:-1800}"
+TALOS_SHUTDOWN_MIN_RUNTIME_SECONDS="${TALOS_SHUTDOWN_MIN_RUNTIME_SECONDS:-1200}"
+PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS="${PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS:-900}"
+NUT_TARGET="${NUT_TARGET:-}"
+CONTROLLER_NAME="${CONTROLLER_NAME:-shutdown-controller}"
+KUBECTL_BIN="${KUBECTL_BIN:-/usr/local/bin/kubectl}"
+TALOSCTL_BIN="${TALOSCTL_BIN:-/usr/local/bin/talosctl}"
+UPSC_BIN="${UPSC_BIN:-upsc}"
+JQ_BIN="${JQ_BIN:-jq}"
+MQTT_PUB_BIN="${MQTT_PUB_BIN:-mosquitto_pub}"
+MQTT_PORT="${MQTT_PORT:-1883}"
+MQTT_CLIENT_ID="${MQTT_CLIENT_ID:-$CONTROLLER_NAME}"
+MQTT_TOPIC_PREFIX="${MQTT_TOPIC_PREFIX:-homelab/$CONTROLLER_NAME}"
+MQTT_RETAIN_STATUS="${MQTT_RETAIN_STATUS:-true}"
+MQTT_DISCOVERY_PREFIX="${MQTT_DISCOVERY_PREFIX:-homeassistant}"
+MQTT_ENABLE_HA_DISCOVERY="${MQTT_ENABLE_HA_DISCOVERY:-true}"
+MQTT_DISCOVERY_REPUBLISH_INTERVAL_SECONDS="${MQTT_DISCOVERY_REPUBLISH_INTERVAL_SECONDS:-300}"
+MQTT_DISCOVERY_SCHEMA_VERSION="${MQTT_DISCOVERY_SCHEMA_VERSION:-4}"
+LOG_TO_CONSOLE="${LOG_TO_CONSOLE:-true}"
+CONSOLE_DEVICE="${CONSOLE_DEVICE:-/dev/console}"
+LOG_TO_FILE="${LOG_TO_FILE:-true}"
+LOG_FILE="${LOG_FILE:-/var/log/shutdown-controller.log}"
+RECOVERY_STATE_RESET_ON_LINE_POWER="${RECOVERY_STATE_RESET_ON_LINE_POWER:-true}"
+
+mkdir -p "$STATE_DIR"
+
+log() {
+	timestamp="$(date -Iseconds)"
+	message="$timestamp shutdown-controller: $*"
+	echo "$message"
+
+	if [ "$LOG_TO_CONSOLE" = "true" ] && [ -w "$CONSOLE_DEVICE" ]; then
+		printf '%s\n' "$message" >"$CONSOLE_DEVICE" 2>/dev/null || true
+	fi
+
+	if [ "$LOG_TO_FILE" = "true" ]; then
+		log_dir="$(dirname "$LOG_FILE")"
+		mkdir -p "$log_dir" 2>/dev/null || true
+		printf '%s\n' "$message" >>"$LOG_FILE" 2>/dev/null || true
+	fi
+}
+
+run_once() {
+	name="$1"
+	shift
+
+	marker="$STATE_DIR/$name.done"
+	if [ -f "$marker" ]; then
+		return 0
+	fi
+
+	if "$@"; then
+		: >"$marker"
+		return 0
+	fi
+
+	return 1
+}
+
+run_action() {
+	label="$1"
+	shift
+
+	if [ "$DRY_RUN" = "true" ]; then
+		log "dry-run: $label"
+		mqtt_publish_event "action" "$label" "dry-run"
+		return 0
+	fi
+
+	log "running: $label"
+	mqtt_publish_event "action" "$label" "running"
+	"$@"
+}
+
+require_command() {
+	if ! command -v "$1" >/dev/null 2>&1; then
+		log "missing required command: $1"
+		exit 1
+	fi
+}
+
+require_executable() {
+	if [ ! -x "$1" ]; then
+		log "missing required executable: $1"
+		exit 1
+	fi
+}
+
+mqtt_enabled() {
+	[ -n "${MQTT_HOST:-}" ]
+}
+
+mqtt_publish() {
+	topic_suffix="$1"
+	payload="$2"
+	retain="${3:-false}"
+
+	if ! mqtt_enabled; then
+		return 0
+	fi
+
+	if ! command -v "$MQTT_PUB_BIN" >/dev/null 2>&1; then
+		return 0
+	fi
+
+	set -- "$MQTT_PUB_BIN" \
+		-h "$MQTT_HOST" \
+		-p "$MQTT_PORT" \
+		-t "$MQTT_TOPIC_PREFIX/$topic_suffix" \
+		-i "$MQTT_CLIENT_ID" \
+		-m "$payload"
+
+	if [ "$retain" = "true" ]; then
+		set -- "$@" -r
+	fi
+
+	if [ -n "${MQTT_USERNAME:-}" ]; then
+		set -- "$@" -u "$MQTT_USERNAME"
+	fi
+
+	if [ -n "${MQTT_PASSWORD:-}" ]; then
+		set -- "$@" -P "$MQTT_PASSWORD"
+	fi
+
+	"$@" >/dev/null 2>&1 || true
+}
+
+mqtt_publish_absolute() {
+	topic="$1"
+	payload="$2"
+	retain="${3:-false}"
+
+	if ! mqtt_enabled; then
+		return 0
+	fi
+
+	if ! command -v "$MQTT_PUB_BIN" >/dev/null 2>&1; then
+		return 0
+	fi
+
+	set -- "$MQTT_PUB_BIN" \
+		-h "$MQTT_HOST" \
+		-p "$MQTT_PORT" \
+		-t "$topic" \
+		-i "$MQTT_CLIENT_ID" \
+		-m "$payload"
+
+	if [ "$retain" = "true" ]; then
+		set -- "$@" -r
+	fi
+
+	if [ -n "${MQTT_USERNAME:-}" ]; then
+		set -- "$@" -u "$MQTT_USERNAME"
+	fi
+
+	if [ -n "${MQTT_PASSWORD:-}" ]; then
+		set -- "$@" -P "$MQTT_PASSWORD"
+	fi
+
+	"$@" >/dev/null 2>&1 || true
+}
+
+write_state_value() {
+	name="$1"
+	value="$2"
+	printf '%s\n' "$value" >"$STATE_DIR/$name"
+}
+
+read_state_value() {
+	name="$1"
+	default_value="$2"
+	if [ -f "$STATE_DIR/$name" ]; then
+		cat "$STATE_DIR/$name" 2>/dev/null || printf '%s\n' "$default_value"
+	else
+		printf '%s\n' "$default_value"
+	fi
+}
+
+marker_bool() {
+	name="$1"
+	if [ -f "$STATE_DIR/$name.done" ]; then
+		printf '%s\n' "true"
+	else
+		printf '%s\n' "false"
+	fi
+}
+
+controller_device_id() {
+	printf '%s\n' "$CONTROLLER_NAME" | tr '.-' '__'
+}
+
+ha_discovery_enabled() {
+	[ "$MQTT_ENABLE_HA_DISCOVERY" = "true" ]
+}
+
+discovery_republish_enabled() {
+	case "$MQTT_DISCOVERY_REPUBLISH_INTERVAL_SECONDS" in
+		''|*[!0-9]*) return 1 ;;
+		0) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+should_publish_discovery() {
+	if ! ha_discovery_enabled; then
+		return 1
+	fi
+
+	if [ ! -f "$STATE_DIR/ha_discovery.last_publish" ]; then
+		return 0
+	fi
+
+	if ! discovery_republish_enabled; then
+		return 1
+	fi
+
+	now="$(date +%s)"
+	last_publish="$(cat "$STATE_DIR/ha_discovery.last_publish" 2>/dev/null || printf '0')"
+	case "$last_publish" in
+		''|*[!0-9]*) return 0 ;;
+	esac
+
+	if [ $((now - last_publish)) -ge "$MQTT_DISCOVERY_REPUBLISH_INTERVAL_SECONDS" ]; then
+		return 0
+	fi
+
+	return 1
+}
+
+record_discovery_publish() {
+	date +%s >"$STATE_DIR/ha_discovery.last_publish"
+}
+
+mqtt_publish_event() {
+	event_name="$1"
+	message="$2"
+	status="$3"
+
+	if ! command -v "$JQ_BIN" >/dev/null 2>&1; then
+		return 0
+	fi
+
+	payload="$($JQ_BIN -nc \
+		--arg controller "$CONTROLLER_NAME" \
+		--arg event "$event_name" \
+		--arg message "$message" \
+		--arg status "$status" \
+		'{controller:$controller,event:$event,message:$message,status:$status}')"
+	write_state_value "last_event" "$event_name"
+	write_state_value "last_message" "$message"
+	mqtt_publish "event" "$payload" "false"
+}
+
+mqtt_publish_state() {
+	status="$1"
+	runtime="$2"
+	charge="$3"
+	mode="$4"
+	ups_connected="$5"
+
+	if ! command -v "$JQ_BIN" >/dev/null 2>&1; then
+		return 0
+	fi
+
+	on_battery="false"
+	if is_on_battery "$status"; then
+		on_battery="true"
+	fi
+
+	recovery_status="$(read_state_value "recovery.status" "idle")"
+	last_event="$(read_state_value "last_event" "")"
+	last_message="$(read_state_value "last_message" "")"
+	ceph_noout_set="$(marker_bool "ceph_noout")"
+	talos_shutdown_started="$(marker_bool "talos_shutdown")"
+	proxmox_shutdown_started="$(marker_bool "proxmox_shutdown")"
+	runtime_formatted="$(format_seconds_hms "$runtime")"
+
+	payload="$($JQ_BIN -nc \
+		--arg controller "$CONTROLLER_NAME" \
+		--arg status "$status" \
+		--arg runtime "$runtime" \
+		--arg runtime_formatted "$runtime_formatted" \
+		--arg charge "$charge" \
+		--arg mode "$mode" \
+		--arg ups_connected "$ups_connected" \
+		--arg on_battery "$on_battery" \
+		--arg ceph_noout_set "$ceph_noout_set" \
+		--arg talos_shutdown_started "$talos_shutdown_started" \
+		--arg proxmox_shutdown_started "$proxmox_shutdown_started" \
+		--arg recovery_status "$recovery_status" \
+		--arg last_event "$last_event" \
+		--arg last_message "$last_message" \
+		'{controller:$controller,status:$status,runtime:$runtime,runtime_formatted:$runtime_formatted,charge:$charge,mode:$mode,ups_connected:($ups_connected == "true"),on_battery:($on_battery == "true"),ceph_noout_set:($ceph_noout_set == "true"),talos_shutdown_started:($talos_shutdown_started == "true"),proxmox_shutdown_started:($proxmox_shutdown_started == "true"),recovery_status:$recovery_status,last_event:$last_event,last_message:$last_message}')"
+	mqtt_publish "state" "$payload" "$MQTT_RETAIN_STATUS"
+	mqtt_publish "status" "$payload" "$MQTT_RETAIN_STATUS"
+}
+
+publish_homeassistant_discovery() {
+	if ! ha_discovery_enabled; then
+		return 0
+	fi
+
+	if ! command -v "$JQ_BIN" >/dev/null 2>&1; then
+		return 0
+	fi
+
+	device_id="$(controller_device_id)"
+	state_topic="$MQTT_TOPIC_PREFIX/state"
+	log "publishing Home Assistant discovery to $MQTT_DISCOVERY_PREFIX for $MQTT_TOPIC_PREFIX"
+	device_json="$($JQ_BIN -nc \
+		--arg identifier "$CONTROLLER_NAME" \
+		--arg name "Shutdown Controller" \
+		--arg manufacturer "FriedCircuits" \
+		--arg model "Proxmox Shutdown Controller" \
+		'{identifiers:[$identifier],name:$name,manufacturer:$manufacturer,model:$model}')"
+
+	publish_discovery_config() {
+		component="$1"
+		object_id="$2"
+		config_payload="$3"
+		mqtt_publish_absolute "$MQTT_DISCOVERY_PREFIX/$component/$device_id/$object_id/config" "$config_payload" "true"
+	}
+
+	clear_discovery_config() {
+		component="$1"
+		object_id="$2"
+		mqtt_publish_absolute "$MQTT_DISCOVERY_PREFIX/$component/$device_id/$object_id/config" "" "true"
+	}
+
+	stored_schema_version="$(read_state_value "ha_discovery.schema_version" "")"
+	if [ "$stored_schema_version" != "$MQTT_DISCOVERY_SCHEMA_VERSION" ]; then
+		log "clearing retained Home Assistant discovery configs for schema version $MQTT_DISCOVERY_SCHEMA_VERSION"
+		clear_discovery_config "sensor" "ups_status"
+		clear_discovery_config "sensor" "ups_runtime"
+		clear_discovery_config "sensor" "ups_runtime_formatted"
+		clear_discovery_config "sensor" "ups_charge"
+		clear_discovery_config "sensor" "controller_mode"
+		clear_discovery_config "sensor" "recovery_status"
+		clear_discovery_config "sensor" "last_event"
+		clear_discovery_config "binary_sensor" "ups_connected"
+		clear_discovery_config "binary_sensor" "on_battery"
+		clear_discovery_config "binary_sensor" "ceph_noout_set"
+		clear_discovery_config "binary_sensor" "talos_shutdown_started"
+		clear_discovery_config "binary_sensor" "proxmox_shutdown_started"
+	fi
+
+	publish_discovery_config "sensor" "ups_status" "$($JQ_BIN -nc --arg name "UPS Status" --arg object_id "ups_status" --arg default_entity_id "sensor.${device_id}_ups_status" --arg unique_id "${device_id}_ups_status" --arg state_topic "$state_topic" --arg icon "mdi:battery-medium" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.status }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "ups_runtime" "$($JQ_BIN -nc --arg name "UPS Runtime Seconds" --arg object_id "ups_runtime" --arg default_entity_id "sensor.${device_id}_ups_runtime" --arg unique_id "${device_id}_ups_runtime" --arg state_topic "$state_topic" --arg unit "s" --arg icon "mdi:timer-outline" --argjson enabled_by_default false --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.runtime | int(0) }}",unit_of_measurement:$unit,icon:$icon,enabled_by_default:$enabled_by_default,device:$device}')"
+	publish_discovery_config "sensor" "ups_runtime_formatted" "$($JQ_BIN -nc --arg name "UPS Runtime" --arg object_id "ups_runtime_formatted" --arg default_entity_id "sensor.${device_id}_ups_runtime_formatted" --arg unique_id "${device_id}_ups_runtime_formatted" --arg state_topic "$state_topic" --arg icon "mdi:timer-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.runtime_formatted }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "ups_charge" "$($JQ_BIN -nc --arg name "UPS Charge" --arg object_id "ups_charge" --arg default_entity_id "sensor.${device_id}_ups_charge" --arg unique_id "${device_id}_ups_charge" --arg state_topic "$state_topic" --arg unit "%" --arg icon "mdi:battery" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.charge | int(0) }}",unit_of_measurement:$unit,icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "controller_mode" "$($JQ_BIN -nc --arg name "Mode" --arg object_id "mode" --arg default_entity_id "sensor.${device_id}_mode" --arg unique_id "${device_id}_controller_mode" --arg state_topic "$state_topic" --arg icon "mdi:transmission-tower" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.mode }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "recovery_status" "$($JQ_BIN -nc --arg name "Recovery Status" --arg object_id "recovery_status" --arg default_entity_id "sensor.${device_id}_recovery_status" --arg unique_id "${device_id}_recovery_status" --arg state_topic "$state_topic" --arg icon "mdi:restore-alert" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.recovery_status }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "last_event" "$($JQ_BIN -nc --arg name "Last Event" --arg object_id "last_event" --arg default_entity_id "sensor.${device_id}_last_event" --arg unique_id "${device_id}_last_event" --arg state_topic "$state_topic" --arg icon "mdi:message-alert-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_event }}",icon:$icon,device:$device}')"
+	publish_discovery_config "binary_sensor" "ups_connected" "$($JQ_BIN -nc --arg name "UPS Connected" --arg object_id "ups_connected" --arg default_entity_id "binary_sensor.${device_id}_ups_connected" --arg unique_id "${device_id}_ups_connected" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.ups_connected | string | lower }}",device_class:"connectivity",device:$device}')"
+	publish_discovery_config "binary_sensor" "on_battery" "$($JQ_BIN -nc --arg name "On Battery" --arg object_id "on_battery" --arg default_entity_id "binary_sensor.${device_id}_on_battery" --arg unique_id "${device_id}_on_battery" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.on_battery | string | lower }}",device_class:"power",device:$device}')"
+	publish_discovery_config "binary_sensor" "ceph_noout_set" "$($JQ_BIN -nc --arg name "Ceph Noout Set" --arg object_id "ceph_noout_set" --arg default_entity_id "binary_sensor.${device_id}_ceph_noout_set" --arg unique_id "${device_id}_ceph_noout_set" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.ceph_noout_set | string | lower }}",device:$device}')"
+	publish_discovery_config "binary_sensor" "talos_shutdown_started" "$($JQ_BIN -nc --arg name "Talos Shutdown Started" --arg object_id "talos_shutdown_started" --arg default_entity_id "binary_sensor.${device_id}_talos_shutdown_started" --arg unique_id "${device_id}_talos_shutdown_started" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.talos_shutdown_started | string | lower }}",device:$device}')"
+	publish_discovery_config "binary_sensor" "proxmox_shutdown_started" "$($JQ_BIN -nc --arg name "Proxmox Shutdown Started" --arg object_id "proxmox_shutdown_started" --arg default_entity_id "binary_sensor.${device_id}_proxmox_shutdown_started" --arg unique_id "${device_id}_proxmox_shutdown_started" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.proxmox_shutdown_started | string | lower }}",device:$device}')"
+	write_state_value "ha_discovery.schema_version" "$MQTT_DISCOVERY_SCHEMA_VERSION"
+	record_discovery_publish
+}
+
+log_startup_summary() {
+	log "startup: dry_run=$DRY_RUN poll_interval_seconds=$POLL_INTERVAL_SECONDS nut_target=$NUT_TARGET"
+	log "startup: status_log_interval_seconds=$STATUS_LOG_INTERVAL_SECONDS"
+	log "startup: thresholds noout=$NOOUT_MIN_RUNTIME_SECONDS talos=$TALOS_SHUTDOWN_MIN_RUNTIME_SECONDS proxmox=$PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS"
+	log "startup: talos_nodes=${TALOS_NODES:-} proxmox_nodes=${PROXMOX_NODES:-}"
+
+	if [ -n "${NUT_USERNAME:-}" ] && [ -n "${NUT_PASSWORD:-}" ]; then
+		log "startup: nut_auth=enabled"
+	else
+		log "startup: nut_auth=disabled"
+	fi
+
+	if [ -n "${PVE_API_ENDPOINT:-}" ] && [ -n "${PVE_API_USER:-}" ]; then
+		log "startup: proxmox_api=enabled endpoint=$PVE_API_ENDPOINT"
+	else
+		log "startup: proxmox_api=disabled"
+	fi
+
+	if ha_discovery_enabled; then
+		log "startup: mqtt_discovery=enabled prefix=$MQTT_DISCOVERY_PREFIX republish_interval_seconds=$MQTT_DISCOVERY_REPUBLISH_INTERVAL_SECONDS"
+	else
+		log "startup: mqtt_discovery=disabled"
+	fi
+}
+
+format_seconds_hms() {
+	seconds="$1"
+	case "$seconds" in
+		''|*[!0-9-]*)
+			printf '%s\n' "unknown"
+			return 0
+			;;
+		-*)
+			printf '%s\n' "unknown"
+			return 0
+			;;
+	esac
+
+	hours=$((seconds / 3600))
+	minutes=$(((seconds % 3600) / 60))
+	remaining_seconds=$((seconds % 60))
+	printf '%02d:%02d:%02d\n' "$hours" "$minutes" "$remaining_seconds"
+}
+
+split_csv() {
+	value="$1"
+	old_ifs="$IFS"
+	IFS=','
+	set -- $value
+	IFS="$old_ifs"
+	for item in "$@"; do
+		if [ -n "$item" ]; then
+			printf '%s\n' "$item"
+		fi
+	done
+}
+
+normal_status_snapshot() {
+	status="$1"
+	printf 'status=%s\n' "$status"
+}
+
+battery_action_stage() {
+	runtime="$1"
+
+	if [ "$runtime" -lt 0 ]; then
+		printf '%s\n' "unknown"
+		return 0
+	fi
+
+	if [ "$runtime" -le "$PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
+		printf '%s\n' "proxmox_shutdown"
+		return 0
+	fi
+
+	if [ "$runtime" -le "$TALOS_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
+		printf '%s\n' "talos_shutdown"
+		return 0
+	fi
+
+	if [ "$runtime" -le "$NOOUT_MIN_RUNTIME_SECONDS" ]; then
+		printf '%s\n' "ceph_noout"
+		return 0
+	fi
+
+	printf '%s\n' "monitoring"
+}
+
+battery_status_snapshot() {
+	status="$1"
+	runtime="$2"
+	charge="$3"
+	stage="$(battery_action_stage "$runtime")"
+	printf 'status=%s stage=%s charge=%s\n' "$status" "$stage" "$charge"
+}
+
+should_log_status() {
+	snapshot="$1"
+	prefix="$2"
+	state_prefix="$STATE_DIR/$prefix"
+	last_snapshot_file="${state_prefix}.snapshot"
+	last_log_time_file="${state_prefix}.time"
+
+	if [ ! -f "$last_snapshot_file" ] || [ ! -f "$last_log_time_file" ]; then
+		return 0
+	fi
+
+	last_snapshot="$(cat "$last_snapshot_file" 2>/dev/null || true)"
+	if [ "$snapshot" != "$last_snapshot" ]; then
+		return 0
+	fi
+
+	case "$STATUS_LOG_INTERVAL_SECONDS" in
+		''|*[!0-9]*)
+			return 1
+			;;
+		0)
+			return 1
+			;;
+	esac
+
+	now="$(date +%s)"
+	last_log_time="$(cat "$last_log_time_file" 2>/dev/null || printf '0')"
+	case "$last_log_time" in
+		''|*[!0-9]*)
+			return 0
+			;;
+	esac
+
+	if [ $((now - last_log_time)) -ge "$STATUS_LOG_INTERVAL_SECONDS" ]; then
+		return 0
+	fi
+
+	return 1
+}
+
+record_status_log() {
+	snapshot="$1"
+	prefix="$2"
+	state_prefix="$STATE_DIR/$prefix"
+	printf '%s\n' "$snapshot" >"${state_prefix}.snapshot"
+	date +%s >"${state_prefix}.time"
+}
+
+log_status_summary() {
+	mode="$1"
+	status="$2"
+	runtime="$3"
+	charge="$4"
+	prefix="$5"
+	if [ "$prefix" = "battery" ]; then
+		snapshot="$(battery_status_snapshot "$status" "$runtime" "$charge")"
+	else
+		snapshot="$(normal_status_snapshot "$status")"
+	fi
+
+	if should_log_status "$snapshot" "$prefix"; then
+		log "$mode: status=$status runtime=$runtime charge=$charge"
+		record_status_log "$snapshot" "$prefix"
+	fi
+	mqtt_publish_state "$status" "$runtime" "$charge" "$prefix" "true"
+}
+
+upsc_field() {
+	field_name="$1"
+	"$UPSC_BIN" "$NUT_TARGET" 2>/dev/null | awk -F': *' -v key="$field_name" '$1 == key {print $2; exit}'
+}
+
+authenticated_nut_field() {
+	field_name="$1"
+	python3 - "$NUT_SERVER_HOST" "${NUT_SERVER_PORT:-3493}" "$NUT_UPS_NAME" "$field_name" "$NUT_USERNAME" "$NUT_PASSWORD" <<'PY'
+import socket
+import sys
+
+host, port, ups_name, field_name, username, password = sys.argv[1:7]
+
+
+def recv_line(sock):
+	data = b""
+	while not data.endswith(b"\n"):
+		chunk = sock.recv(4096)
+		if not chunk:
+			raise RuntimeError("connection closed")
+		data += chunk
+	return data.decode().strip()
+
+
+def send_command(sock, *parts):
+	command = " ".join(parts) + "\n"
+	sock.sendall(command.encode())
+	return recv_line(sock)
+
+
+def parse_var_response(response):
+	parts = response.split(" ", 3)
+	if len(parts) != 4 or parts[0] != "VAR":
+		raise RuntimeError(response)
+	value = parts[3]
+	if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+		value = value[1:-1]
+	return value
+
+
+with socket.create_connection((host, int(port)), timeout=5) as sock:
+	response = send_command(sock, "USERNAME", username)
+	if not response.startswith("OK"):
+		raise RuntimeError(response)
+
+	response = send_command(sock, "PASSWORD", password)
+	if not response.startswith("OK"):
+		raise RuntimeError(response)
+
+	response = send_command(sock, "GET", "VAR", ups_name, field_name)
+	print(parse_var_response(response))
+PY
+}
+
+nut_field() {
+	field_name="$1"
+
+	if [ -n "${NUT_USERNAME:-}" ] && [ -n "${NUT_PASSWORD:-}" ]; then
+		authenticated_nut_field "$field_name" 2>/dev/null || true
+		return 0
+	fi
+
+	upsc_field "$field_name" || true
+}
+
+runtime_seconds() {
+	runtime_value="$(nut_field battery.runtime)"
+	case "$runtime_value" in
+		''|*[!0-9]*)
+			printf '%s\n' "-1"
+			;;
+		*)
+			printf '%s\n' "$runtime_value"
+			;;
+	esac
+}
+
+ups_status() {
+	nut_field ups.status
+}
+
+is_on_battery() {
+	case "$1" in
+		*OB*|*LB*|*FSD*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+set_ceph_noout() {
+	require_executable "$KUBECTL_BIN"
+
+	run_action \
+		"set ceph noout" \
+		"$KUBECTL_BIN" -n "$CEPH_NAMESPACE" exec "deploy/$CEPH_TOOLS_DEPLOYMENT" -- ceph osd set noout
+}
+
+shutdown_talos_nodes() {
+	nodes="$(split_csv "${TALOS_NODES:-}")"
+	if [ -z "$nodes" ]; then
+		log "no TALOS_NODES configured"
+		return 0
+	fi
+
+	require_executable "$TALOSCTL_BIN"
+
+	printf '%s\n' "$nodes" | while IFS= read -r node; do
+		run_action "shutdown Talos node $node" "$TALOSCTL_BIN" -n "$node" shutdown --wait=false
+	done
+}
+
+pve_api_request() {
+	method="$1"
+	path="$2"
+	data="$3"
+
+	if [ -n "${PVE_API_TOKEN_ID:-}" ] && [ -n "${PVE_API_TOKEN_SECRET:-}" ]; then
+		curl_opts="-fsS"
+		if [ "${PVE_API_TLS_INSECURE:-false}" = "true" ]; then
+			curl_opts="$curl_opts -k"
+		fi
+
+		# shellcheck disable=SC2086
+		curl $curl_opts -X "$method" \
+			-H "Authorization: PVEAPIToken=${PVE_API_USER}!${PVE_API_TOKEN_ID}=${PVE_API_TOKEN_SECRET}" \
+			-d "$data" \
+			"$PVE_API_ENDPOINT$path" >/dev/null
+		return 0
+	fi
+
+	if [ -n "${PVE_API_PASSWORD:-}" ]; then
+		curl_opts="-fsS"
+		if [ "${PVE_API_TLS_INSECURE:-false}" = "true" ]; then
+			curl_opts="$curl_opts -k"
+		fi
+
+		# shellcheck disable=SC2086
+		auth_json="$(curl $curl_opts -X POST \
+			-d "username=$PVE_API_USER" \
+			--data-urlencode "password=$PVE_API_PASSWORD" \
+			"$PVE_API_ENDPOINT/access/ticket")"
+
+		require_command "$JQ_BIN"
+		ticket="$(printf '%s' "$auth_json" | "$JQ_BIN" -r '.data.ticket')"
+		csrf="$(printf '%s' "$auth_json" | "$JQ_BIN" -r '.data.CSRFPreventionToken')"
+
+		# shellcheck disable=SC2086
+		curl $curl_opts -X "$method" \
+			-H "CSRFPreventionToken: $csrf" \
+			-H "Cookie: PVEAuthCookie=$ticket" \
+			-d "$data" \
+			"$PVE_API_ENDPOINT$path" >/dev/null
+		return 0
+	fi
+
+	log "Proxmox API credentials are not configured"
+	return 1
+}
+
+shutdown_proxmox_nodes() {
+	if [ -z "${PVE_API_ENDPOINT:-}" ] || [ -z "${PVE_API_USER:-}" ]; then
+		log "PVE_API_* is not configured; skipping Proxmox shutdown"
+		return 0
+	fi
+
+	nodes="$(split_csv "${PROXMOX_NODES:-}")"
+	if [ -z "$nodes" ]; then
+		log "no PROXMOX_NODES configured"
+		return 0
+	fi
+
+	printf '%s\n' "$nodes" | while IFS= read -r node; do
+		run_action "shutdown Proxmox node $node" pve_api_request POST "/nodes/$node/status" "command=shutdown"
+	done
+}
+
+handle_battery_event() {
+	status="$1"
+	runtime="$2"
+	charge="$3"
+
+	log_status_summary "UPS on battery" "$status" "$runtime" "$charge" "battery"
+
+	if [ "$runtime" -lt 0 ]; then
+		log "battery.runtime is unavailable; skipping threshold-based actions"
+		mqtt_publish_event "battery_runtime_unavailable" "battery.runtime is unavailable; skipping threshold-based actions" "warning"
+		mqtt_publish_state "$status" "$runtime" "$charge" "battery" "true"
+		return 0
+	fi
+
+	if [ "$runtime" -le "$NOOUT_MIN_RUNTIME_SECONDS" ]; then
+		run_once ceph_noout set_ceph_noout || true
+	fi
+
+	if [ "$runtime" -le "$TALOS_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
+		run_once talos_shutdown shutdown_talos_nodes || true
+	fi
+
+	if [ "$runtime" -le "$PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
+		run_once proxmox_shutdown shutdown_proxmox_nodes || true
+	fi
+}
+
+reset_event_state() {
+	if [ "$RECOVERY_STATE_RESET_ON_LINE_POWER" != "true" ]; then
+		return 0
+	fi
+
+	rm -f \
+		"$STATE_DIR/ceph_noout.done" \
+		"$STATE_DIR/talos_shutdown.done" \
+		"$STATE_DIR/proxmox_shutdown.done"
+	write_state_value "last_event" ""
+	write_state_value "last_message" ""
+}
+
+main() {
+	if [ -z "$NUT_TARGET" ]; then
+		log "NUT_TARGET is not configured"
+		exit 1
+	fi
+
+	if [ -n "${NUT_USERNAME:-}" ] || [ -n "${NUT_PASSWORD:-}" ]; then
+		require_command python3
+		if [ -z "${NUT_SERVER_HOST:-}" ] || [ -z "${NUT_UPS_NAME:-}" ]; then
+			log "NUT_SERVER_HOST and NUT_UPS_NAME are required for authenticated NUT polling"
+			exit 1
+		fi
+	else
+		require_command "$UPSC_BIN"
+	fi
+
+	log_startup_summary
+	publish_homeassistant_discovery
+	mqtt_publish_event "startup" "shutdown controller started" "ok"
+	log "starting controller loop for $NUT_TARGET"
+
+	while true; do
+		status="$(ups_status)"
+		runtime="$(runtime_seconds)"
+		charge="$(nut_field battery.charge)"
+
+		if should_publish_discovery; then
+			publish_homeassistant_discovery
+		fi
+
+		if [ -z "$status" ]; then
+			log "unable to read UPS status from $NUT_TARGET"
+			mqtt_publish_event "ups_unavailable" "unable to read UPS status" "warning"
+			mqtt_publish_state "unknown" "-1" "" "disconnected" "false"
+			sleep "$POLL_INTERVAL_SECONDS"
+			continue
+		fi
+
+		if is_on_battery "$status"; then
+			handle_battery_event "$status" "$runtime" "$charge"
+		else
+			reset_event_state
+			log_status_summary "UPS status" "$status" "$runtime" "$charge" "normal"
+		fi
+
+		sleep "$POLL_INTERVAL_SECONDS"
+	done
+}
+
+main "$@"
