@@ -15,7 +15,7 @@ output "vip_dns_name" {
 
 output "container_vm_ids" {
   description = "Proxmox VMIDs assigned to the load balancer containers, keyed by instance name."
-  value       = { for key, ct in proxmox_virtual_environment_container.this : key => ct.vm_id }
+  value       = { for key, inst in module.lxc : key => inst.container_vm_id }
 }
 
 output "container_names" {
@@ -30,5 +30,5 @@ output "container_ipv4_addresses" {
 
 output "container_ipv4_reported" {
   description = "IPv4 addresses reported by Proxmox for each container network interface."
-  value       = { for key, ct in proxmox_virtual_environment_container.this : key => ct.ipv4 }
+  value       = { for key, inst in module.lxc : key => inst.container_ipv4_reported }
 }

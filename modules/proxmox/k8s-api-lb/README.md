@@ -2,9 +2,12 @@
 
 This module provisions 2-3 Proxmox LXCs running HAProxy and Keepalived outside the cluster so a Talos or Kubernetes control plane can be exposed through a stable VRRP virtual IP.
 
+Internally it composes the sibling `../lxc` module so the base Proxmox LXC behavior stays aligned with the rest of this repository.
+
 ## Features
 
 - Uses the `bpg/proxmox` provider with typed inputs.
+- Builds on the local `proxmox/lxc` module for the underlying container provisioning.
 - Supports 2 or 3 load balancer nodes.
 - Downloads an LXC template to each target Proxmox node when needed.
 - Renders HAProxy and Keepalived configuration from Terraform templates.
@@ -96,6 +99,7 @@ module "k8s_api_lb" {
 - Proxmox API TLS verification is enabled by default. Set `pve_connection.tls_insecure = true` only if your environment requires it.
 - When `container_template.file_id` is not supplied, the module downloads the template to each Proxmox node referenced by `instances`.
 - The first container boot is handled by a Proxmox hook script. Package auto-start is explicitly suppressed during bootstrap so the packaged HAProxy unit does not race the container-safe replacement unit.
+- This module owns the `proxmox` provider configuration so it can safely iterate the child `lxc` module with `for_each`. Keep that provider configuration at this level or above when calling it from Terragrunt.
 
 ## Inputs
 
