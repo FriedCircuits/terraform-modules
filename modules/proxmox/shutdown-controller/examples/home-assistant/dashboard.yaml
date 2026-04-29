@@ -15,11 +15,12 @@ cards:
       Last event: **{{ states('sensor.shutdown_controller_last_event') or 'none' }}**
       {% elif is_state('binary_sensor.shutdown_controller_ceph_noout_set', 'on')
          or is_state('binary_sensor.shutdown_controller_talos_shutdown_started', 'on')
+        or is_state('binary_sensor.shutdown_controller_linux_shutdown_started', 'on')
          or is_state('binary_sensor.shutdown_controller_proxmox_shutdown_started', 'on') %}
       ## Shutdown Sequence In Progress
       Controller mode: **{{ states('sensor.shutdown_controller_mode') }}**
 
-      Active stage: **{% if is_state('binary_sensor.shutdown_controller_proxmox_shutdown_started', 'on') %}Proxmox shutdown{% elif is_state('binary_sensor.shutdown_controller_talos_shutdown_started', 'on') %}Talos shutdown{% elif is_state('binary_sensor.shutdown_controller_ceph_noout_set', 'on') %}Ceph noout{% else %}Unknown{% endif %}**
+      Active stage: **{% if is_state('binary_sensor.shutdown_controller_proxmox_shutdown_started', 'on') %}Proxmox shutdown{% elif is_state('binary_sensor.shutdown_controller_linux_shutdown_started', 'on') %}Linux shutdown{% elif is_state('binary_sensor.shutdown_controller_talos_shutdown_started', 'on') %}Talos shutdown{% elif is_state('binary_sensor.shutdown_controller_ceph_noout_set', 'on') %}Ceph noout{% else %}Unknown{% endif %}**
 
       Recovery status: **{{ states('sensor.shutdown_controller_recovery_status') }}**
 
@@ -111,6 +112,14 @@ cards:
         hide_state: false
 
       - type: tile
+        entity: binary_sensor.shutdown_controller_linux_shutdown_started
+        name: Linux Shutdown
+        icon: mdi:lan-disconnect
+        color: red
+        vertical: false
+        hide_state: false
+
+      - type: tile
         entity: sensor.shutdown_controller_last_event
         name: Last Event
         icon: mdi:message-alert-outline
@@ -177,4 +186,5 @@ cards:
       - entity: binary_sensor.shutdown_controller_on_battery
       - entity: binary_sensor.shutdown_controller_ceph_noout_set
       - entity: binary_sensor.shutdown_controller_talos_shutdown_started
+      - entity: binary_sensor.shutdown_controller_linux_shutdown_started
       - entity: binary_sensor.shutdown_controller_proxmox_shutdown_started

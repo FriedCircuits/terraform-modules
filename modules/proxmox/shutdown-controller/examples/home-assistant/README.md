@@ -8,6 +8,7 @@ They assume the module is using the default controller name of `shutdown-control
 - `binary_sensor.shutdown_controller_on_battery`
 - `binary_sensor.shutdown_controller_ceph_noout_set`
 - `binary_sensor.shutdown_controller_talos_shutdown_started`
+- `binary_sensor.shutdown_controller_linux_shutdown_started`
 - `binary_sensor.shutdown_controller_proxmox_shutdown_started`
 - `sensor.shutdown_controller_ups_status`
 - `sensor.shutdown_controller_ups_runtime`

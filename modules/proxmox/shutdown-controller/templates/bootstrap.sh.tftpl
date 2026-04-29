@@ -33,6 +33,20 @@ printf %s '${talosconfig_b64}' | base64 -d >/etc/shutdown-controller/talosconfig
 chmod 0600 /etc/shutdown-controller/talosconfig
 %{ endif ~}
 
+%{ if write_linux_shutdown_ssh_key ~}
+printf %s '${linux_shutdown_ssh_private_key_b64}' | base64 -d >/etc/shutdown-controller/linux-shutdown.key
+chmod 0600 /etc/shutdown-controller/linux-shutdown.key
+%{ else ~}
+rm -f /etc/shutdown-controller/linux-shutdown.key
+%{ endif ~}
+
+%{ if write_linux_shutdown_known_hosts ~}
+printf %s '${linux_shutdown_known_hosts_b64}' | base64 -d >/etc/shutdown-controller/known_hosts
+%{ else ~}
+: >/etc/shutdown-controller/known_hosts
+%{ endif ~}
+chmod 0600 /etc/shutdown-controller/known_hosts
+
 printf %s '${systemd_unit_b64}' | base64 -d >/etc/systemd/system/shutdown-controller.service
 chmod 0644 /etc/systemd/system/shutdown-controller.service
 

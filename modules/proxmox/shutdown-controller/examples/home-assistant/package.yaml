@@ -7,6 +7,7 @@ template:
             is_state('binary_sensor.shutdown_controller_on_battery', 'on')
             or is_state('binary_sensor.shutdown_controller_ceph_noout_set', 'on')
             or is_state('binary_sensor.shutdown_controller_talos_shutdown_started', 'on')
+            or is_state('binary_sensor.shutdown_controller_linux_shutdown_started', 'on')
             or is_state('binary_sensor.shutdown_controller_proxmox_shutdown_started', 'on')
           }}
         icon: >-
@@ -42,6 +43,10 @@ template:
           'on') %}
             Talos shutdown started
           {% elif
+          is_state('binary_sensor.shutdown_controller_linux_shutdown_started',
+          'on') %}
+            Linux shutdown started
+          {% elif
           is_state('binary_sensor.shutdown_controller_proxmox_shutdown_started',
           'on') %}
             Proxmox shutdown started
@@ -61,6 +66,7 @@ group:
       - binary_sensor.shutdown_controller_on_battery
       - binary_sensor.shutdown_controller_ceph_noout_set
       - binary_sensor.shutdown_controller_talos_shutdown_started
+      - binary_sensor.shutdown_controller_linux_shutdown_started
       - binary_sensor.shutdown_controller_proxmox_shutdown_started
       - binary_sensor.shutdown_controller_incident_active
       - binary_sensor.shutdown_controller_recovery_pending

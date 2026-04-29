@@ -352,10 +352,43 @@ variable "talos_nodes" {
   default     = []
 }
 
+variable "linux_shutdown_targets" {
+  description = "Generic Linux nodes that the controller may shut down over SSH."
+  type = list(object({
+    name    = optional(string)
+    host    = string
+    user    = optional(string)
+    port    = optional(number)
+    command = optional(string)
+  }))
+  default = []
+}
+
 variable "proxmox_nodes" {
   description = "Proxmox nodes that the controller may shut down through the Proxmox API."
   type        = list(string)
   default     = []
+}
+
+variable "linux_shutdown_ssh" {
+  description = "Optional SSH settings injected into the controller for generic Linux shutdown targets."
+  type = object({
+    private_key_content      = string
+    known_hosts_content      = optional(string)
+    user                     = optional(string)
+    port                     = optional(number)
+    strict_host_key_checking = optional(string)
+  })
+  default   = null
+  sensitive = true
+
+  validation {
+    condition = var.linux_shutdown_ssh == null || contains(
+      ["yes", "no", "accept-new"],
+      coalesce(try(var.linux_shutdown_ssh.strict_host_key_checking, null), "accept-new")
+    )
+    error_message = "linux_shutdown_ssh.strict_host_key_checking must be one of yes, no, or accept-new."
+  }
 }
 
 variable "pve_api" {

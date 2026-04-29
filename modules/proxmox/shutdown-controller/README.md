@@ -11,13 +11,14 @@ The container is bootstrapped through a Proxmox hook script and prepared with:
 - `mosquitto_pub` via `mosquitto-clients` for optional MQTT status and event publishing
 - `nut-client` for UPS status polling against an existing NUT server
 - optional kubeconfig and talosconfig files
-- an environment file with Ceph, NUT, Talos, and Proxmox targets
+- an environment file with Ceph, NUT, Talos, Linux, and Proxmox targets
 - a built-in staged controller script with an optional override and matching systemd services
 
-The default controller stages three actions based on the reported UPS runtime:
+The default controller stages shutdown actions based on the reported UPS runtime:
 
 - set Ceph `noout`
 - shut down Talos nodes
+- shut down generic Linux nodes over SSH
 - shut down selected Proxmox nodes
 
 Use `controller_script` only when you need to replace that built-in flow.
@@ -72,11 +73,25 @@ module "shutdown_controller" {
     MQTT_DISCOVERY_REPUBLISH_INTERVAL_SECONDS = "300"
     NOOUT_MIN_RUNTIME_SECONDS              = "1800"
     TALOS_SHUTDOWN_MIN_RUNTIME_SECONDS     = "1200"
+    LINUX_SHUTDOWN_MIN_RUNTIME_SECONDS     = "1100"
     PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS   = "900"
   }
 
   talos_nodes   = ["talos-node-1", "talos-node-2", "talos-node-3"]
+  linux_shutdown_targets = [
+    {
+      name = "edge-worker-1"
+      host = "edge-worker-1"
+      user = "automation"
+    }
+  ]
   proxmox_nodes = ["pve-node-2"]
+
+  linux_shutdown_ssh = {
+    private_key_content      = var.shutdown_controller_ssh_private_key
+    strict_host_key_checking = "accept-new"
+    user                     = "automation"
+  }
 
   pve_connection = {
     endpoint     = "https://pve.example.com:8006"
@@ -105,7 +120,10 @@ module "shutdown_controller" {
 - Home Assistant discovery is retried periodically, not just once at startup. This avoids missing discovery when the broker or network is not ready during boot.
 - Ceph actions are expected to run through Kubernetes, for example via `kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph ...`.
 - `talos_nodes` entries are passed directly to `talosctl -n`. Hostnames work as long as the controller container can resolve and reach them. IPs avoid a DNS dependency, but only make sense when those node addresses are stable. Use whichever identifier is more reliable in your environment during an outage.
-- The built-in controller stages Ceph `noout`, Talos shutdown, and Proxmox shutdown based on runtime thresholds. Override `controller_script` only when you need different behavior.
+- `linux_shutdown_targets` are shut down over SSH and default to `sudo systemctl poweroff`. Each target can override `user`, `port`, or `command` individually.
+- `linux_shutdown_ssh` injects the SSH private key and optional known_hosts data used for generic Linux shutdown targets. `strict_host_key_checking` defaults to `accept-new`; use `yes` when you want to pin host keys explicitly.
+- The built-in controller stages Ceph `noout`, Talos shutdown, generic Linux shutdown, and Proxmox shutdown based on runtime thresholds. Override `controller_script` only when you need different behavior.
+- `LINUX_SHUTDOWN_MIN_RUNTIME_SECONDS` lets you place generic Linux shutdown before or after Talos and Proxmox actions depending on what you want to keep alive longest during an outage.
 - The module also installs a one-shot `shutdown-controller-recovery.service` by default. It runs on LXC boot, waits for line power and healthy Ceph, then unsets `noout` safely.
 - Omit `pve_api` entirely if the controller does not need to make Proxmox API calls from inside the container.
 
@@ -142,6 +160,7 @@ Common sensitive inputs:
 - `talosconfig_content`
 - `nut_credentials`
 - `mqtt_credentials`
+- `linux_shutdown_ssh`
 - `pve_api`
 - `pve_connection`
 
@@ -191,6 +210,7 @@ Home Assistant discovery entities include:
 - Controller mode
 - Ceph noout set
 - Talos shutdown started
+- Linux shutdown started
 - Proxmox shutdown started
 - Recovery status
 - Last event

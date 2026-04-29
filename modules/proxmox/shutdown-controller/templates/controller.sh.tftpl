@@ -9,11 +9,13 @@ POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-15}"
 STATUS_LOG_INTERVAL_SECONDS="${STATUS_LOG_INTERVAL_SECONDS:-0}"
 NOOUT_MIN_RUNTIME_SECONDS="${NOOUT_MIN_RUNTIME_SECONDS:-1800}"
 TALOS_SHUTDOWN_MIN_RUNTIME_SECONDS="${TALOS_SHUTDOWN_MIN_RUNTIME_SECONDS:-1200}"
+LINUX_SHUTDOWN_MIN_RUNTIME_SECONDS="${LINUX_SHUTDOWN_MIN_RUNTIME_SECONDS:-1200}"
 PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS="${PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS:-900}"
 NUT_TARGET="${NUT_TARGET:-}"
 CONTROLLER_NAME="${CONTROLLER_NAME:-shutdown-controller}"
 KUBECTL_BIN="${KUBECTL_BIN:-/usr/local/bin/kubectl}"
 TALOSCTL_BIN="${TALOSCTL_BIN:-/usr/local/bin/talosctl}"
+SSH_BIN="${SSH_BIN:-ssh}"
 UPSC_BIN="${UPSC_BIN:-upsc}"
 JQ_BIN="${JQ_BIN:-jq}"
 MQTT_PUB_BIN="${MQTT_PUB_BIN:-mosquitto_pub}"
@@ -24,12 +26,18 @@ MQTT_RETAIN_STATUS="${MQTT_RETAIN_STATUS:-true}"
 MQTT_DISCOVERY_PREFIX="${MQTT_DISCOVERY_PREFIX:-homeassistant}"
 MQTT_ENABLE_HA_DISCOVERY="${MQTT_ENABLE_HA_DISCOVERY:-true}"
 MQTT_DISCOVERY_REPUBLISH_INTERVAL_SECONDS="${MQTT_DISCOVERY_REPUBLISH_INTERVAL_SECONDS:-300}"
-MQTT_DISCOVERY_SCHEMA_VERSION="${MQTT_DISCOVERY_SCHEMA_VERSION:-4}"
+MQTT_DISCOVERY_SCHEMA_VERSION="${MQTT_DISCOVERY_SCHEMA_VERSION:-5}"
 LOG_TO_CONSOLE="${LOG_TO_CONSOLE:-true}"
 CONSOLE_DEVICE="${CONSOLE_DEVICE:-/dev/console}"
 LOG_TO_FILE="${LOG_TO_FILE:-true}"
 LOG_FILE="${LOG_FILE:-/var/log/shutdown-controller.log}"
 RECOVERY_STATE_RESET_ON_LINE_POWER="${RECOVERY_STATE_RESET_ON_LINE_POWER:-true}"
+LINUX_SHUTDOWN_TARGETS_B64="${LINUX_SHUTDOWN_TARGETS_B64:-}"
+LINUX_SHUTDOWN_SSH_USER="${LINUX_SHUTDOWN_SSH_USER:-root}"
+LINUX_SHUTDOWN_SSH_PORT="${LINUX_SHUTDOWN_SSH_PORT:-22}"
+LINUX_SHUTDOWN_SSH_STRICT_HOST_KEY_CHECKING="${LINUX_SHUTDOWN_SSH_STRICT_HOST_KEY_CHECKING:-accept-new}"
+LINUX_SHUTDOWN_SSH_KEY_PATH="${LINUX_SHUTDOWN_SSH_KEY_PATH:-/etc/shutdown-controller/linux-shutdown.key}"
+LINUX_SHUTDOWN_SSH_KNOWN_HOSTS_PATH="${LINUX_SHUTDOWN_SSH_KNOWN_HOSTS_PATH:-/etc/shutdown-controller/known_hosts}"
 
 mkdir -p "$STATE_DIR"
 
@@ -281,6 +289,7 @@ mqtt_publish_state() {
 	last_message="$(read_state_value "last_message" "")"
 	ceph_noout_set="$(marker_bool "ceph_noout")"
 	talos_shutdown_started="$(marker_bool "talos_shutdown")"
+	linux_shutdown_started="$(marker_bool "linux_shutdown")"
 	proxmox_shutdown_started="$(marker_bool "proxmox_shutdown")"
 	runtime_formatted="$(format_seconds_hms "$runtime")"
 
@@ -295,11 +304,12 @@ mqtt_publish_state() {
 		--arg on_battery "$on_battery" \
 		--arg ceph_noout_set "$ceph_noout_set" \
 		--arg talos_shutdown_started "$talos_shutdown_started" \
+		--arg linux_shutdown_started "$linux_shutdown_started" \
 		--arg proxmox_shutdown_started "$proxmox_shutdown_started" \
 		--arg recovery_status "$recovery_status" \
 		--arg last_event "$last_event" \
 		--arg last_message "$last_message" \
-		'{controller:$controller,status:$status,runtime:$runtime,runtime_formatted:$runtime_formatted,charge:$charge,mode:$mode,ups_connected:($ups_connected == "true"),on_battery:($on_battery == "true"),ceph_noout_set:($ceph_noout_set == "true"),talos_shutdown_started:($talos_shutdown_started == "true"),proxmox_shutdown_started:($proxmox_shutdown_started == "true"),recovery_status:$recovery_status,last_event:$last_event,last_message:$last_message}')"
+		'{controller:$controller,status:$status,runtime:$runtime,runtime_formatted:$runtime_formatted,charge:$charge,mode:$mode,ups_connected:($ups_connected == "true"),on_battery:($on_battery == "true"),ceph_noout_set:($ceph_noout_set == "true"),talos_shutdown_started:($talos_shutdown_started == "true"),linux_shutdown_started:($linux_shutdown_started == "true"),proxmox_shutdown_started:($proxmox_shutdown_started == "true"),recovery_status:$recovery_status,last_event:$last_event,last_message:$last_message}')"
 	mqtt_publish "state" "$payload" "$MQTT_RETAIN_STATUS"
 	mqtt_publish "status" "$payload" "$MQTT_RETAIN_STATUS"
 }
@@ -350,6 +360,7 @@ publish_homeassistant_discovery() {
 		clear_discovery_config "binary_sensor" "on_battery"
 		clear_discovery_config "binary_sensor" "ceph_noout_set"
 		clear_discovery_config "binary_sensor" "talos_shutdown_started"
+		clear_discovery_config "binary_sensor" "linux_shutdown_started"
 		clear_discovery_config "binary_sensor" "proxmox_shutdown_started"
 	fi
 
@@ -364,6 +375,7 @@ publish_homeassistant_discovery() {
 	publish_discovery_config "binary_sensor" "on_battery" "$($JQ_BIN -nc --arg name "On Battery" --arg object_id "on_battery" --arg default_entity_id "binary_sensor.${device_id}_on_battery" --arg unique_id "${device_id}_on_battery" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.on_battery | string | lower }}",device_class:"power",device:$device}')"
 	publish_discovery_config "binary_sensor" "ceph_noout_set" "$($JQ_BIN -nc --arg name "Ceph Noout Set" --arg object_id "ceph_noout_set" --arg default_entity_id "binary_sensor.${device_id}_ceph_noout_set" --arg unique_id "${device_id}_ceph_noout_set" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.ceph_noout_set | string | lower }}",device:$device}')"
 	publish_discovery_config "binary_sensor" "talos_shutdown_started" "$($JQ_BIN -nc --arg name "Talos Shutdown Started" --arg object_id "talos_shutdown_started" --arg default_entity_id "binary_sensor.${device_id}_talos_shutdown_started" --arg unique_id "${device_id}_talos_shutdown_started" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.talos_shutdown_started | string | lower }}",device:$device}')"
+	publish_discovery_config "binary_sensor" "linux_shutdown_started" "$($JQ_BIN -nc --arg name "Linux Shutdown Started" --arg object_id "linux_shutdown_started" --arg default_entity_id "binary_sensor.${device_id}_linux_shutdown_started" --arg unique_id "${device_id}_linux_shutdown_started" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.linux_shutdown_started | string | lower }}",device:$device}')"
 	publish_discovery_config "binary_sensor" "proxmox_shutdown_started" "$($JQ_BIN -nc --arg name "Proxmox Shutdown Started" --arg object_id "proxmox_shutdown_started" --arg default_entity_id "binary_sensor.${device_id}_proxmox_shutdown_started" --arg unique_id "${device_id}_proxmox_shutdown_started" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.proxmox_shutdown_started | string | lower }}",device:$device}')"
 	write_state_value "ha_discovery.schema_version" "$MQTT_DISCOVERY_SCHEMA_VERSION"
 	record_discovery_publish
@@ -372,8 +384,8 @@ publish_homeassistant_discovery() {
 log_startup_summary() {
 	log "startup: dry_run=$DRY_RUN poll_interval_seconds=$POLL_INTERVAL_SECONDS nut_target=$NUT_TARGET"
 	log "startup: status_log_interval_seconds=$STATUS_LOG_INTERVAL_SECONDS"
-	log "startup: thresholds noout=$NOOUT_MIN_RUNTIME_SECONDS talos=$TALOS_SHUTDOWN_MIN_RUNTIME_SECONDS proxmox=$PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS"
-	log "startup: talos_nodes=${TALOS_NODES:-} proxmox_nodes=${PROXMOX_NODES:-}"
+	log "startup: thresholds noout=$NOOUT_MIN_RUNTIME_SECONDS talos=$TALOS_SHUTDOWN_MIN_RUNTIME_SECONDS linux=$LINUX_SHUTDOWN_MIN_RUNTIME_SECONDS proxmox=$PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS"
+	log "startup: talos_nodes=${TALOS_NODES:-} linux_shutdown_targets_b64_set=$([ -n "${LINUX_SHUTDOWN_TARGETS_B64:-}" ] && printf true || printf false) proxmox_nodes=${PROXMOX_NODES:-}"
 
 	if [ -n "${NUT_USERNAME:-}" ] && [ -n "${NUT_PASSWORD:-}" ]; then
 		log "startup: nut_auth=enabled"
@@ -441,6 +453,11 @@ battery_action_stage() {
 
 	if [ "$runtime" -le "$PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
 		printf '%s\n' "proxmox_shutdown"
+		return 0
+	fi
+
+	if [ "$runtime" -le "$LINUX_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
+		printf '%s\n' "linux_shutdown"
 		return 0
 	fi
 
@@ -642,6 +659,71 @@ shutdown_talos_nodes() {
 	done
 }
 
+linux_shutdown_targets_json() {
+	if [ -z "$LINUX_SHUTDOWN_TARGETS_B64" ]; then
+		printf '%s\n' '[]'
+		return 0
+	fi
+
+	decoded_targets="$(printf '%s' "$LINUX_SHUTDOWN_TARGETS_B64" | base64 -d 2>/dev/null || true)"
+	if [ -z "$decoded_targets" ]; then
+		printf '%s\n' '[]'
+		return 0
+	fi
+
+	printf '%s\n' "$decoded_targets"
+}
+
+linux_shutdown_over_ssh() {
+	host="$1"
+	user="$2"
+	port="$3"
+	remote_command="$4"
+
+	set -- "$SSH_BIN" \
+		-i "$LINUX_SHUTDOWN_SSH_KEY_PATH" \
+		-o BatchMode=yes \
+		-o IdentitiesOnly=yes \
+		-o StrictHostKeyChecking="$LINUX_SHUTDOWN_SSH_STRICT_HOST_KEY_CHECKING" \
+		-o UserKnownHostsFile="$LINUX_SHUTDOWN_SSH_KNOWN_HOSTS_PATH" \
+		-p "$port" \
+		"$user@$host" \
+		"$remote_command"
+
+	"$@"
+}
+
+shutdown_linux_nodes() {
+	targets_json="$(linux_shutdown_targets_json)"
+	if [ "$targets_json" = '[]' ]; then
+		log "no LINUX_SHUTDOWN_TARGETS configured"
+		return 0
+	fi
+
+	require_executable "$SSH_BIN"
+	require_command "$JQ_BIN"
+
+	if [ ! -f "$LINUX_SHUTDOWN_SSH_KEY_PATH" ]; then
+		log "Linux shutdown SSH key is not configured; skipping Linux shutdown targets"
+		return 0
+	fi
+
+	printf '%s' "$targets_json" | "$JQ_BIN" -cr '.[] | @base64' | while IFS= read -r target_b64; do
+		target_json="$(printf '%s' "$target_b64" | base64 -d)"
+		name="$(printf '%s' "$target_json" | "$JQ_BIN" -r '.name // empty')"
+		host="$(printf '%s' "$target_json" | "$JQ_BIN" -r '.host')"
+		user="$(printf '%s' "$target_json" | "$JQ_BIN" -r --arg default_user "$LINUX_SHUTDOWN_SSH_USER" '.user // $default_user')"
+		port="$(printf '%s' "$target_json" | "$JQ_BIN" -r --argjson default_port "$LINUX_SHUTDOWN_SSH_PORT" '.port // $default_port')"
+		remote_command="$(printf '%s' "$target_json" | "$JQ_BIN" -r '.command // "sudo systemctl poweroff"')"
+		label="$host"
+		if [ -n "$name" ]; then
+			label="$name"
+		fi
+
+		run_action "shutdown Linux node $label" linux_shutdown_over_ssh "$host" "$user" "$port" "$remote_command"
+	done
+}
+
 pve_api_request() {
 	method="$1"
 	path="$2"
@@ -729,6 +811,10 @@ handle_battery_event() {
 		run_once talos_shutdown shutdown_talos_nodes || true
 	fi
 
+	if [ "$runtime" -le "$LINUX_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
+		run_once linux_shutdown shutdown_linux_nodes || true
+	fi
+
 	if [ "$runtime" -le "$PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
 		run_once proxmox_shutdown shutdown_proxmox_nodes || true
 	fi
@@ -742,6 +828,7 @@ reset_event_state() {
 	rm -f \
 		"$STATE_DIR/ceph_noout.done" \
 		"$STATE_DIR/talos_shutdown.done" \
+		"$STATE_DIR/linux_shutdown.done" \
 		"$STATE_DIR/proxmox_shutdown.done"
 	write_state_value "last_event" ""
 	write_state_value "last_message" ""
