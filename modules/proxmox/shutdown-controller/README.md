@@ -4,12 +4,15 @@ This module deploys a small Proxmox LXC that coordinates graceful shutdown steps
 
 It is designed to run outside the Kubernetes cluster it protects, so it can keep operating while the cluster is degraded or shutting down.
 
+Internally it composes the sibling `../lxc` module so the base Proxmox LXC behavior stays aligned with the rest of this repository.
+
 The container is bootstrapped through a Proxmox hook script and prepared with:
 
 - `kubectl` for Kubernetes and Ceph toolbox access
 - `talosctl` for graceful shutdown of Talos nodes
 - `mosquitto_pub` via `mosquitto-clients` for optional MQTT status and event publishing
 - `nut-client` for UPS status polling against an existing NUT server
+- the local `proxmox/lxc` module for the underlying container provisioning
 - optional kubeconfig and talosconfig files
 - an environment file with Ceph, NUT, Talos, Linux, and Proxmox targets
 - a built-in staged controller script with an optional override and matching systemd services
@@ -126,6 +129,7 @@ module "shutdown_controller" {
 - `LINUX_SHUTDOWN_MIN_RUNTIME_SECONDS` lets you place generic Linux shutdown before or after Talos and Proxmox actions depending on what you want to keep alive longest during an outage.
 - The module also installs a one-shot `shutdown-controller-recovery.service` by default. It runs on LXC boot, waits for line power and healthy Ceph, then unsets `noout` safely.
 - Omit `pve_api` entirely if the controller does not need to make Proxmox API calls from inside the container.
+- This module owns the `proxmox` provider configuration so it can safely compose the child `lxc` module. Keep that provider configuration at this level or above when calling it from Terragrunt.
 
 ## Recovery
 

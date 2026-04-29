@@ -50,18 +50,6 @@ locals {
     }
   }
 
-  target_nodes = toset([for inst in values(local.instances) : inst.node_name])
-
-  template_download_enabled = try(var.container_template.file_id, null) == null
-
-  template_file_ids = {
-    for key, inst in local.instances : key => (
-      local.template_download_enabled
-      ? proxmox_download_file.container_template[inst.node_name].id
-      : var.container_template.file_id
-    )
-  }
-
   talos_api_enabled       = coalesce(try(var.talos_api.enabled, null), false)
   talos_api_frontend_port = coalesce(try(var.talos_api.frontend_port, null), 50000)
   talos_api_backends = local.talos_api_enabled ? (
