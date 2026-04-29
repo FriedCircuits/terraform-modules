@@ -226,3 +226,7 @@ Reference Home Assistant YAML is included in [examples/home-assistant/README.md]
 - [examples/home-assistant/automations.yaml](examples/home-assistant/automations.yaml)
 - [examples/home-assistant/package.yaml](examples/home-assistant/package.yaml)
 - [examples/home-assistant/dashboard.yaml](examples/home-assistant/dashboard.yaml)
+
+Example dashboard:
+
+![Shutdown controller Home Assistant dashboard](examples/home-assistant/dashboard-screenshot.png)
