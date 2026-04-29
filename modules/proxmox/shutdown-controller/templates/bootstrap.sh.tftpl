@@ -1,0 +1,69 @@
+#!/bin/sh
+set -eu
+
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update
+apt-get install -y ${packages}
+
+install -d -m 0755 /etc/shutdown-controller /usr/local/sbin
+
+curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${kubectl_version}/bin/linux/amd64/kubectl"
+chmod 0755 /usr/local/bin/kubectl
+
+curl -fsSL -o /usr/local/bin/talosctl "https://github.com/siderolabs/talos/releases/download/${talosctl_version}/talosctl-linux-amd64"
+chmod 0755 /usr/local/bin/talosctl
+
+printf %s '${controller_env_b64}' | base64 -d >/etc/shutdown-controller/controller.env
+chmod 0600 /etc/shutdown-controller/controller.env
+
+printf %s '${controller_script_b64}' | base64 -d >/usr/local/sbin/shutdown-controller
+chmod 0755 /usr/local/sbin/shutdown-controller
+
+printf %s '${recovery_script_b64}' | base64 -d >/usr/local/sbin/shutdown-controller-recovery
+chmod 0755 /usr/local/sbin/shutdown-controller-recovery
+
+%{ if write_kubeconfig ~}
+printf %s '${kubeconfig_b64}' | base64 -d >/etc/shutdown-controller/kubeconfig
+chmod 0600 /etc/shutdown-controller/kubeconfig
+%{ endif ~}
+
+%{ if write_talosconfig ~}
+printf %s '${talosconfig_b64}' | base64 -d >/etc/shutdown-controller/talosconfig
+chmod 0600 /etc/shutdown-controller/talosconfig
+%{ endif ~}
+
+%{ if write_linux_shutdown_ssh_key ~}
+printf %s '${linux_shutdown_ssh_private_key_b64}' | base64 -d >/etc/shutdown-controller/linux-shutdown.key
+chmod 0600 /etc/shutdown-controller/linux-shutdown.key
+%{ else ~}
+rm -f /etc/shutdown-controller/linux-shutdown.key
+%{ endif ~}
+
+%{ if write_linux_shutdown_known_hosts ~}
+printf %s '${linux_shutdown_known_hosts_b64}' | base64 -d >/etc/shutdown-controller/known_hosts
+%{ else ~}
+: >/etc/shutdown-controller/known_hosts
+%{ endif ~}
+chmod 0600 /etc/shutdown-controller/known_hosts
+
+printf %s '${systemd_unit_b64}' | base64 -d >/etc/systemd/system/shutdown-controller.service
+chmod 0644 /etc/systemd/system/shutdown-controller.service
+
+printf %s '${recovery_systemd_unit_b64}' | base64 -d >/etc/systemd/system/shutdown-controller-recovery.service
+chmod 0644 /etc/systemd/system/shutdown-controller-recovery.service
+
+systemctl daemon-reload
+
+%{ if enable_controller_service ~}
+systemctl enable --now shutdown-controller.service
+%{ else ~}
+systemctl disable shutdown-controller.service >/dev/null 2>&1 || true
+%{ endif ~}
+
+%{ if enable_recovery_service ~}
+systemctl enable shutdown-controller-recovery.service >/dev/null 2>&1 || true
+systemctl start shutdown-controller-recovery.service >/dev/null 2>&1 || true
+%{ else ~}
+systemctl disable shutdown-controller-recovery.service >/dev/null 2>&1 || true
+%{ endif ~}

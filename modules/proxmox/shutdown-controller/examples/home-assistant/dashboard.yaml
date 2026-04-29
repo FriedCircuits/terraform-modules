@@ -1,0 +1,175 @@
+type: vertical-stack
+cards:
+  - type: heading
+    heading: Shutdown Controller
+    icon: mdi:transmission-tower
+
+  - type: markdown
+    content: |-
+      {% if is_state('binary_sensor.shutdown_controller_on_battery', 'on') %}
+      ## Power Event Active
+      UPS runtime remaining: **{{ states('sensor.shutdown_controller_ups_runtime_formatted') }}**
+
+      Battery charge: **{{ states('sensor.shutdown_controller_ups_charge') }}%**
+
+      Last event: **{{ states('sensor.shutdown_controller_last_event') or 'none' }}**
+      {% elif is_state('binary_sensor.shutdown_controller_ceph_noout_set', 'on')
+         or is_state('binary_sensor.shutdown_controller_talos_shutdown_started', 'on')
+        or is_state('binary_sensor.shutdown_controller_linux_shutdown_started', 'on')
+         or is_state('binary_sensor.shutdown_controller_proxmox_shutdown_started', 'on') %}
+      ## Shutdown Sequence In Progress
+      Controller mode: **{{ states('sensor.shutdown_controller_mode') }}**
+
+      Active stage: **{% if is_state('binary_sensor.shutdown_controller_proxmox_shutdown_started', 'on') %}Proxmox shutdown{% elif is_state('binary_sensor.shutdown_controller_linux_shutdown_started', 'on') %}Linux shutdown{% elif is_state('binary_sensor.shutdown_controller_talos_shutdown_started', 'on') %}Talos shutdown{% elif is_state('binary_sensor.shutdown_controller_ceph_noout_set', 'on') %}Ceph noout{% else %}Unknown{% endif %}**
+
+      Recovery status: **{{ states('sensor.shutdown_controller_recovery_status') }}**
+
+      Last event: **{{ states('sensor.shutdown_controller_last_event') or 'none' }}**
+      {% elif is_state('binary_sensor.shutdown_controller_ups_connected', 'off') %}
+      ## UPS Connectivity Lost
+      The controller cannot currently reach the UPS.
+
+      Last event: **{{ states('sensor.shutdown_controller_last_event') or 'none' }}**
+      {% else %}
+      ## System Healthy
+      Controller mode: **{{ states('sensor.shutdown_controller_mode') }}**
+
+      UPS status: **{{ states('sensor.shutdown_controller_ups_status') }}**
+
+      Recovery status: **{{ states('sensor.shutdown_controller_recovery_status') }}**
+      {% endif %}
+
+  - type: heading
+    heading: Power Health
+    icon: mdi:power-plug-battery
+
+  - type: grid
+    columns: 2
+    square: false
+    cards:
+      - type: tile
+        entity: binary_sensor.shutdown_controller_ups_connected
+        name: UPS Link
+        icon: mdi:power-plug
+        color: green
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: binary_sensor.shutdown_controller_on_battery
+        name: On Battery
+        icon: mdi:battery-alert
+        color: amber
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_recovery_status
+        name: Recovery
+        icon: mdi:restore-alert
+        color: blue
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_mode
+        name: Mode
+        icon: mdi:transmission-tower
+        color: teal
+        vertical: false
+        hide_state: false
+
+  - type: heading
+    heading: Shutdown Stages
+    icon: mdi:playlist-check
+
+  - type: grid
+    columns: 2
+    square: false
+    cards:
+      - type: tile
+        entity: binary_sensor.shutdown_controller_ceph_noout_set
+        name: Ceph Noout
+        icon: mdi:database-lock
+        color: deep-orange
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: binary_sensor.shutdown_controller_talos_shutdown_started
+        name: Talos Shutdown
+        icon: mdi:server-off
+        color: red
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: binary_sensor.shutdown_controller_proxmox_shutdown_started
+        name: Proxmox Shutdown
+        icon: mdi:power-standby
+        color: red
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: binary_sensor.shutdown_controller_linux_shutdown_started
+        name: Linux Shutdown
+        icon: mdi:lan-disconnect
+        color: red
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_event
+        name: Last Event
+        icon: mdi:message-alert-outline
+        color: purple
+        vertical: false
+        hide_state: false
+
+  - type: heading
+    heading: UPS Metrics
+    icon: mdi:gauge
+
+  - type: grid
+    columns: 3
+    square: false
+    cards:
+      - type: tile
+        entity: sensor.shutdown_controller_ups_status
+        name: UPS Status
+        icon: mdi:battery-medium
+        color: teal
+        vertical: true
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_ups_runtime_formatted
+        name: Runtime
+        icon: mdi:timer-outline
+        color: cyan
+        vertical: true
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_ups_charge
+        name: Charge
+        icon: mdi:battery
+        color: green
+        vertical: true
+        hide_state: false
+
+  - type: heading
+    heading: Timeline
+    icon: mdi:chart-timeline-variant
+
+  - type: history-graph
+    title: Power Event History
+    hours_to_show: 12
+    refresh_interval: 60
+    entities:
+      - entity: binary_sensor.shutdown_controller_on_battery
+      - entity: binary_sensor.shutdown_controller_ceph_noout_set
+      - entity: binary_sensor.shutdown_controller_talos_shutdown_started
+      - entity: binary_sensor.shutdown_controller_linux_shutdown_started
+      - entity: binary_sensor.shutdown_controller_proxmox_shutdown_started

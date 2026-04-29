@@ -1,0 +1,285 @@
+#!/bin/sh
+set -eu
+
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+
+STATE_DIR="/run/shutdown-controller"
+KUBECTL_BIN="${KUBECTL_BIN:-/usr/local/bin/kubectl}"
+UPSC_BIN="${UPSC_BIN:-upsc}"
+JQ_BIN="${JQ_BIN:-jq}"
+LOG_TO_CONSOLE="${LOG_TO_CONSOLE:-true}"
+CONSOLE_DEVICE="${CONSOLE_DEVICE:-/dev/console}"
+LOG_TO_FILE="${LOG_TO_FILE:-true}"
+LOG_FILE="${LOG_FILE:-/var/log/shutdown-controller.log}"
+RECOVERY_CHECK_INTERVAL_SECONDS="${RECOVERY_CHECK_INTERVAL_SECONDS:-30}"
+RECOVERY_MAX_WAIT_SECONDS="${RECOVERY_MAX_WAIT_SECONDS:-1800}"
+RECOVERY_REQUIRE_HEALTH_OK="${RECOVERY_REQUIRE_HEALTH_OK:-true}"
+NUT_TARGET="${NUT_TARGET:-}"
+CONTROLLER_NAME="${CONTROLLER_NAME:-shutdown-controller}"
+MQTT_PUB_BIN="${MQTT_PUB_BIN:-mosquitto_pub}"
+MQTT_PORT="${MQTT_PORT:-1883}"
+MQTT_CLIENT_ID="${MQTT_CLIENT_ID:-$CONTROLLER_NAME-recovery}"
+MQTT_TOPIC_PREFIX="${MQTT_TOPIC_PREFIX:-homelab/$CONTROLLER_NAME}"
+
+mkdir -p "$STATE_DIR"
+
+log() {
+	timestamp="$(date -Iseconds)"
+	message="$timestamp shutdown-controller-recovery: $*"
+	echo "$message"
+
+	if [ "$LOG_TO_CONSOLE" = "true" ] && [ -w "$CONSOLE_DEVICE" ]; then
+		printf '%s\n' "$message" >"$CONSOLE_DEVICE" 2>/dev/null || true
+	fi
+
+	if [ "$LOG_TO_FILE" = "true" ]; then
+		log_dir="$(dirname "$LOG_FILE")"
+		mkdir -p "$log_dir" 2>/dev/null || true
+		printf '%s\n' "$message" >>"$LOG_FILE" 2>/dev/null || true
+	fi
+}
+
+require_command() {
+	if ! command -v "$1" >/dev/null 2>&1; then
+		log "missing required command: $1"
+		exit 0
+	fi
+}
+
+require_executable() {
+	if [ ! -x "$1" ]; then
+		log "missing required executable: $1"
+		exit 0
+	fi
+}
+
+mqtt_enabled() {
+	[ -n "${MQTT_HOST:-}" ]
+}
+
+mqtt_publish() {
+	topic_suffix="$1"
+	payload="$2"
+	retain="${3:-false}"
+
+	if ! mqtt_enabled; then
+		return 0
+	fi
+
+	if ! command -v "$MQTT_PUB_BIN" >/dev/null 2>&1; then
+		return 0
+	fi
+
+	set -- "$MQTT_PUB_BIN" \
+		-h "$MQTT_HOST" \
+		-p "$MQTT_PORT" \
+		-t "$MQTT_TOPIC_PREFIX/$topic_suffix" \
+		-i "$MQTT_CLIENT_ID" \
+		-m "$payload"
+
+	if [ "$retain" = "true" ]; then
+		set -- "$@" -r
+	fi
+
+	if [ -n "${MQTT_USERNAME:-}" ]; then
+		set -- "$@" -u "$MQTT_USERNAME"
+	fi
+
+	if [ -n "${MQTT_PASSWORD:-}" ]; then
+		set -- "$@" -P "$MQTT_PASSWORD"
+	fi
+
+	"$@" >/dev/null 2>&1 || true
+}
+
+mqtt_publish_event() {
+	event_name="$1"
+	message="$2"
+	status="$3"
+
+	if ! command -v "$JQ_BIN" >/dev/null 2>&1; then
+		return 0
+	fi
+
+	payload="$($JQ_BIN -nc \
+		--arg controller "$CONTROLLER_NAME" \
+		--arg event "$event_name" \
+		--arg message "$message" \
+		--arg status "$status" \
+		'{controller:$controller,event:$event,message:$message,status:$status}')"
+	write_state_value "last_event" "$event_name"
+	write_state_value "last_message" "$message"
+	mqtt_publish "event" "$payload" "false"
+}
+
+write_state_value() {
+	name="$1"
+	value="$2"
+	printf '%s\n' "$value" >"$STATE_DIR/$name"
+}
+
+upsc_field() {
+	field_name="$1"
+	"$UPSC_BIN" "$NUT_TARGET" 2>/dev/null | awk -F': *' -v key="$field_name" '$1 == key {print $2; exit}'
+}
+
+authenticated_nut_field() {
+	field_name="$1"
+	python3 - "$NUT_SERVER_HOST" "${NUT_SERVER_PORT:-3493}" "$NUT_UPS_NAME" "$field_name" "$NUT_USERNAME" "$NUT_PASSWORD" <<'PY'
+import socket
+import sys
+
+host, port, ups_name, field_name, username, password = sys.argv[1:7]
+
+
+def recv_line(sock):
+	data = b""
+	while not data.endswith(b"\n"):
+		chunk = sock.recv(4096)
+		if not chunk:
+			raise RuntimeError("connection closed")
+		data += chunk
+	return data.decode().strip()
+
+
+def send_command(sock, *parts):
+	command = " ".join(parts) + "\n"
+	sock.sendall(command.encode())
+	return recv_line(sock)
+
+
+def parse_var_response(response):
+	parts = response.split(" ", 3)
+	if len(parts) != 4 or parts[0] != "VAR":
+		raise RuntimeError(response)
+	value = parts[3]
+	if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+		value = value[1:-1]
+	return value
+
+
+with socket.create_connection((host, int(port)), timeout=5) as sock:
+	response = send_command(sock, "USERNAME", username)
+	if not response.startswith("OK"):
+		raise RuntimeError(response)
+
+	response = send_command(sock, "PASSWORD", password)
+	if not response.startswith("OK"):
+		raise RuntimeError(response)
+
+	response = send_command(sock, "GET", "VAR", ups_name, field_name)
+	print(parse_var_response(response))
+PY
+}
+
+nut_field() {
+	field_name="$1"
+
+	if [ -n "${NUT_USERNAME:-}" ] && [ -n "${NUT_PASSWORD:-}" ]; then
+		authenticated_nut_field "$field_name" 2>/dev/null || true
+		return 0
+	fi
+
+	if [ -z "$NUT_TARGET" ]; then
+		return 0
+	fi
+
+	upsc_field "$field_name" || true
+}
+
+is_on_battery() {
+	case "$1" in
+		*OB*|*LB*|*FSD*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+ceph_tool() {
+	require_executable "$KUBECTL_BIN"
+	"$KUBECTL_BIN" -n "$CEPH_NAMESPACE" exec "deploy/$CEPH_TOOLS_DEPLOYMENT" -- ceph "$@"
+}
+
+ceph_noout_is_set() {
+	flags_line="$(ceph_tool osd dump 2>/dev/null | awk '/^flags / {sub(/^flags /, ""); print; exit}')"
+	case ",$flags_line," in
+		*,noout,*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+ceph_is_healthy() {
+	require_command "$JQ_BIN"
+	health_status="$(ceph_tool status -f json 2>/dev/null | "$JQ_BIN" -r '.health.status // empty')"
+	[ "$health_status" = "HEALTH_OK" ]
+}
+
+clear_event_state() {
+	rm -f \
+		"$STATE_DIR/ceph_noout.done" \
+		"$STATE_DIR/talos_shutdown.done" \
+		"$STATE_DIR/proxmox_shutdown.done"
+}
+
+main() {
+	if [ -z "${CEPH_NAMESPACE:-}" ] || [ -z "${CEPH_TOOLS_DEPLOYMENT:-}" ]; then
+		write_state_value "recovery.status" "skipped"
+		log "Ceph recovery is not configured; skipping"
+		exit 0
+	fi
+
+	if ! ceph_noout_is_set; then
+		write_state_value "recovery.status" "idle"
+		log "Ceph noout is not set; nothing to recover"
+		mqtt_publish_event "recovery_skipped" "ceph noout is not set" "ok"
+		clear_event_state
+		exit 0
+	fi
+
+	start_time="$(date +%s)"
+	write_state_value "recovery.status" "waiting"
+	log "starting recovery check loop"
+	mqtt_publish_event "recovery_started" "starting recovery check loop" "ok"
+
+	while true; do
+		if [ -n "$NUT_TARGET" ]; then
+			status="$(nut_field ups.status)"
+			if [ -z "$status" ]; then
+				log "unable to read UPS status during recovery; waiting"
+				sleep "$RECOVERY_CHECK_INTERVAL_SECONDS"
+				continue
+			fi
+
+			if is_on_battery "$status"; then
+				log "UPS still on battery with status=$status; waiting before unsetting noout"
+				sleep "$RECOVERY_CHECK_INTERVAL_SECONDS"
+				continue
+			fi
+		fi
+
+		if [ "$RECOVERY_REQUIRE_HEALTH_OK" = "true" ] && ! ceph_is_healthy; then
+			log "Ceph is not healthy yet; waiting before unsetting noout"
+			sleep "$RECOVERY_CHECK_INTERVAL_SECONDS"
+		else
+			log "unsetting ceph noout"
+			if ceph_tool osd unset noout; then
+				clear_event_state
+				write_state_value "recovery.status" "complete"
+				log "recovery complete"
+				mqtt_publish_event "recovery_complete" "ceph noout unset" "ok"
+				exit 0
+			fi
+			log "failed to unset ceph noout; waiting"
+			sleep "$RECOVERY_CHECK_INTERVAL_SECONDS"
+		fi
+
+		now="$(date +%s)"
+		if [ $((now - start_time)) -ge "$RECOVERY_MAX_WAIT_SECONDS" ]; then
+			write_state_value "recovery.status" "timeout"
+			log "recovery timed out; leaving noout set for manual review"
+			mqtt_publish_event "recovery_timeout" "leaving ceph noout set for manual review" "warning"
+			exit 0
+		fi
+	done
+}
+
+main "$@"

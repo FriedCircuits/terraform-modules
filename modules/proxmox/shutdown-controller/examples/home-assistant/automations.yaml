@@ -1,0 +1,53 @@
+- id: shutdown_controller_on_battery_alert
+  alias: Shutdown Controller - UPS On Battery
+  description: Notify when the shutdown controller detects that the UPS is on battery.
+  mode: single
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.shutdown_controller_on_battery
+      to: "on"
+  action:
+    - service: persistent_notification.create
+      data:
+        title: Shutdown controller on battery
+        message: >-
+          The shutdown controller is reporting an on-battery event. UPS status:
+          {{ states('sensor.shutdown_controller_ups_status') }}. Runtime
+          remaining: {{
+          states('sensor.shutdown_controller_ups_runtime_formatted') }}. Charge:
+          {{ states('sensor.shutdown_controller_ups_charge') }}%.
+
+- id: shutdown_controller_recovery_complete
+  alias: Shutdown Controller - Recovery Complete
+  description: Notify when the recovery helper clears Ceph noout after power returns.
+  mode: single
+  trigger:
+    - platform: state
+      entity_id: sensor.shutdown_controller_recovery_status
+      to: complete
+  action:
+    - service: persistent_notification.create
+      data:
+        title: Shutdown controller recovery complete
+        message: >-
+          Recovery completed successfully and Ceph noout was unset. Last event:
+          {{ states('sensor.shutdown_controller_last_event') }}.
+
+- id: shutdown_controller_ups_disconnected
+  alias: Shutdown Controller - UPS Connectivity Lost
+  description: Notify when the controller can no longer reach the UPS.
+  mode: single
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.shutdown_controller_ups_connected
+      to: "off"
+      for:
+        minutes: 2
+  action:
+    - service: persistent_notification.create
+      data:
+        title: Shutdown controller lost UPS connectivity
+        message: >-
+          The shutdown controller can no longer reach the UPS. Controller mode:
+          {{ states('sensor.shutdown_controller_mode') }}. Last event: {{
+          states('sensor.shutdown_controller_last_event') }}.

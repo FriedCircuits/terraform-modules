@@ -1,0 +1,16 @@
+[Unit]
+Description=External shutdown controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=${env_file}
+ExecStart=${controller_path}
+StandardOutput=journal+console
+StandardError=journal+console
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

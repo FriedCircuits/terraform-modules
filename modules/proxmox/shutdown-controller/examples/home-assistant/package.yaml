@@ -1,0 +1,99 @@
+template:
+  - binary_sensor:
+      - name: Shutdown Controller Incident Active
+        unique_id: shutdown_controller_incident_active
+        state: >-
+          {{
+            is_state('binary_sensor.shutdown_controller_on_battery', 'on')
+            or is_state('binary_sensor.shutdown_controller_ceph_noout_set', 'on')
+            or is_state('binary_sensor.shutdown_controller_talos_shutdown_started', 'on')
+            or is_state('binary_sensor.shutdown_controller_linux_shutdown_started', 'on')
+            or is_state('binary_sensor.shutdown_controller_proxmox_shutdown_started', 'on')
+          }}
+        icon: >-
+          {% if is_state('binary_sensor.shutdown_controller_incident_active',
+          'on') %}
+            mdi:alert-octagon
+          {% else %}
+            mdi:shield-check
+          {% endif %}
+
+      - name: Shutdown Controller Recovery Pending
+        unique_id: shutdown_controller_recovery_pending
+        state: >-
+          {{ states('sensor.shutdown_controller_recovery_status') in ['waiting',
+          'timeout'] }}
+        icon: mdi:restore-alert
+
+  - sensor:
+      - name: Shutdown Controller Summary
+        unique_id: shutdown_controller_summary
+        state: >-
+          {% if is_state('binary_sensor.shutdown_controller_ups_connected',
+          'off') %}
+            UPS disconnected
+          {% elif is_state('binary_sensor.shutdown_controller_on_battery', 'on')
+          %}
+            On battery
+          {% elif is_state('binary_sensor.shutdown_controller_ceph_noout_set',
+          'on') %}
+            Ceph noout set
+          {% elif
+          is_state('binary_sensor.shutdown_controller_talos_shutdown_started',
+          'on') %}
+            Talos shutdown started
+          {% elif
+          is_state('binary_sensor.shutdown_controller_linux_shutdown_started',
+          'on') %}
+            Linux shutdown started
+          {% elif
+          is_state('binary_sensor.shutdown_controller_proxmox_shutdown_started',
+          'on') %}
+            Proxmox shutdown started
+          {% elif is_state('sensor.shutdown_controller_recovery_status',
+          'complete') %}
+            Recovery complete
+          {% else %}
+            Healthy
+          {% endif %}
+        icon: mdi:timeline-text
+
+group:
+  shutdown_controller_entities:
+    name: Shutdown Controller
+    entities:
+      - binary_sensor.shutdown_controller_ups_connected
+      - binary_sensor.shutdown_controller_on_battery
+      - binary_sensor.shutdown_controller_ceph_noout_set
+      - binary_sensor.shutdown_controller_talos_shutdown_started
+      - binary_sensor.shutdown_controller_linux_shutdown_started
+      - binary_sensor.shutdown_controller_proxmox_shutdown_started
+      - binary_sensor.shutdown_controller_incident_active
+      - binary_sensor.shutdown_controller_recovery_pending
+      - sensor.shutdown_controller_ups_status
+      - sensor.shutdown_controller_ups_runtime_formatted
+      - sensor.shutdown_controller_ups_charge
+      - sensor.shutdown_controller_mode
+      - sensor.shutdown_controller_recovery_status
+      - sensor.shutdown_controller_last_event
+      - sensor.shutdown_controller_summary
+
+automation:
+  - id: shutdown_controller_package_alert
+    alias: Shutdown Controller - Incident Active
+    description: Raise a persistent notification when the controller enters an
+      outage-handling state.
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.shutdown_controller_incident_active
+        to: "on"
+    action:
+      - service: persistent_notification.create
+        data:
+          title: Shutdown controller incident active
+          message: >-
+            Summary: {{ states('sensor.shutdown_controller_summary') }}.
+            Runtime: {{ states('sensor.shutdown_controller_ups_runtime_formatted') }}.
+            Charge: {{ states('sensor.shutdown_controller_ups_charge') }}%.
+            Last event: {{ states('sensor.shutdown_controller_last_event') }}.
