@@ -1,13 +1,3 @@
-moved {
-  from = proxmox_virtual_environment_container.this
-  to   = module.lxc.proxmox_virtual_environment_container.this
-}
-
-moved {
-  from = proxmox_virtual_environment_file.hook_script
-  to   = module.lxc.proxmox_virtual_environment_file.hook_script[0]
-}
-
 module "lxc" {
   source = "../lxc"
 
