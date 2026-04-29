@@ -5,9 +5,6 @@ locals {
     format("Shutdown controller %s", var.name)
   )
 
-  template_download_enabled = try(var.container_template.file_id, null) == null
-  template_file_id          = local.template_download_enabled ? proxmox_download_file.container_template[var.node_name].id : var.container_template.file_id
-
   controller_script_content = coalesce(var.controller_script, file("${path.module}/templates/controller.sh.tftpl"))
   recovery_script_content   = file("${path.module}/templates/recovery.sh.tftpl")
 

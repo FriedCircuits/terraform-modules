@@ -21,4 +21,5 @@ output "container_ipv4_reported" {
 output "hook_script_file_id" {
   description = "Proxmox snippet file ID for the uploaded hook script, or null when no hook script is configured."
   value       = local.hook_script_file_id
+  sensitive   = true
 }
