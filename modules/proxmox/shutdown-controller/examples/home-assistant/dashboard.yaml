@@ -160,21 +160,6 @@ cards:
         hide_state: false
 
   - type: heading
-    heading: Controller Detail
-    icon: mdi:list-box-outline
-
-  - type: entities
-    title: Controller State
-    show_header_toggle: false
-    entities:
-      - entity: sensor.shutdown_controller_mode
-        name: Mode
-      - entity: sensor.shutdown_controller_recovery_status
-        name: Recovery Status
-      - entity: sensor.shutdown_controller_last_event
-        name: Last Event
-
-  - type: heading
     heading: Timeline
     icon: mdi:chart-timeline-variant
 
