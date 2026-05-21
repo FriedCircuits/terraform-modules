@@ -120,6 +120,7 @@ module "shutdown_controller" {
 - `STATUS_LOG_INTERVAL_SECONDS` defaults to `0`, which logs UPS status changes only. Set it to a positive value if you want a periodic heartbeat for unchanged status.
 - The built-in controller writes to `/var/log/shutdown-controller.log` by default because this has been more reliable than journald or the Proxmox LXC console.
 - When `mqtt` is configured, the controller publishes retained controller state to `<topic_prefix>/state`, keeps a compatibility copy at `<topic_prefix>/status`, publishes transient event messages to `<topic_prefix>/event`, and publishes Home Assistant MQTT discovery topics by default.
+- MQTT publish failures are logged, but they do not stop the controller or recovery flow.
 - Home Assistant discovery is retried periodically, not just once at startup. This avoids missing discovery when the broker or network is not ready during boot.
 - Ceph actions are expected to run through Kubernetes, for example via `kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph ...`.
 - `talos_nodes` entries are passed directly to `talosctl -n`. Hostnames work as long as the controller container can resolve and reach them. IPs avoid a DNS dependency, but only make sense when those node addresses are stable. Use whichever identifier is more reliable in your environment during an outage.

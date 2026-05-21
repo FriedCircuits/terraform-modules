@@ -107,6 +107,23 @@ mqtt_enabled() {
 	[ -n "${MQTT_HOST:-}" ]
 }
 
+mqtt_run_publish() {
+	topic="$1"
+	shift
+
+	if output="$("$@" 2>&1)"; then
+		return 0
+	fi
+
+	if [ -n "$output" ]; then
+		log "mqtt publish failed for $topic: $output"
+	else
+		log "mqtt publish failed for $topic"
+	fi
+
+	return 0
+}
+
 mqtt_publish() {
 	topic_suffix="$1"
 	payload="$2"
@@ -139,7 +156,7 @@ mqtt_publish() {
 		set -- "$@" -P "$MQTT_PASSWORD"
 	fi
 
-	"$@" >/dev/null 2>&1 || true
+	mqtt_run_publish "$MQTT_TOPIC_PREFIX/$topic_suffix" "$@"
 }
 
 mqtt_publish_absolute() {
@@ -174,7 +191,7 @@ mqtt_publish_absolute() {
 		set -- "$@" -P "$MQTT_PASSWORD"
 	fi
 
-	"$@" >/dev/null 2>&1 || true
+	mqtt_run_publish "$topic" "$@"
 }
 
 write_state_value() {
