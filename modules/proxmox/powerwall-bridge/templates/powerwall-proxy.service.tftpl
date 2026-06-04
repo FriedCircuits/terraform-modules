@@ -1,0 +1,18 @@
+[Unit]
+Description=pyPowerwall proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/powerwall-bridge/src/proxy
+EnvironmentFile=${env_file}
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=append:/var/log/powerwall-proxy.log
+StandardError=append:/var/log/powerwall-proxy.log
+ExecStart=/opt/powerwall-bridge/venv/bin/python /opt/powerwall-bridge/src/proxy/server.py
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

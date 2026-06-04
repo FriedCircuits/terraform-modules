@@ -2,6 +2,7 @@
 
 - [k8s-api-lb](k8s-api-lb/README.md): external API VIP for Talos or Kubernetes control planes
 - [lxc](lxc/README.md): reusable single-container building block for higher-level Proxmox modules
+- [powerwall-bridge](powerwall-bridge/README.md): LXC-based pyPowerwall proxy with optional MQTT publishing for Home Assistant
 - [shutdown-controller](shutdown-controller/README.md): LXC-based UPS and staged shutdown coordinator for Ceph, Talos, and Proxmox
 - [talos-pve](talos-pve/README.md): Talos control plane VMs on Proxmox
 - [vm](vm/): generic Proxmox VM building blocks

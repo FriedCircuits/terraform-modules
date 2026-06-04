@@ -1,0 +1,1019 @@
+#!/usr/bin/env python3
+import json
+import os
+import re
+import signal
+import sys
+import time
+import traceback
+import urllib.error
+import urllib.request
+
+import paho.mqtt.client as mqtt
+
+
+PROXY_URL = os.environ.get("PROXY_URL", "http://127.0.0.1:${proxy_port}").rstrip("/")
+MQTT_HOST = os.environ["MQTT_HOST"]
+MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
+MQTT_TOPIC_PREFIX = os.environ.get("MQTT_TOPIC_PREFIX", "${topic_prefix}")
+MQTT_DISCOVERY_PREFIX = os.environ.get("MQTT_DISCOVERY_PREFIX", "${discovery_prefix}")
+MQTT_CLIENT_ID = os.environ.get("MQTT_CLIENT_ID", "${device_id}-mqtt")
+MQTT_USERNAME = os.environ.get("MQTT_USERNAME")
+MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD")
+MQTT_RETAIN = os.environ.get("MQTT_RETAIN", "true").lower() == "true"
+PUBLISH_INTERVAL = int(os.environ.get("MQTT_PUBLISH_INTERVAL_SECONDS", "30"))
+STATUS_LOG_INTERVAL_SECONDS = int(os.environ.get("MQTT_STATUS_LOG_INTERVAL_SECONDS", "900"))
+FAILURES_BEFORE_OFFLINE = int(os.environ.get("MQTT_FAILURES_BEFORE_OFFLINE", "5"))
+FETCH_TIMEOUT_SECONDS = float(os.environ.get("MQTT_FETCH_TIMEOUT_SECONDS", "15"))
+FETCH_RETRIES = int(os.environ.get("MQTT_FETCH_RETRIES", "2"))
+FETCH_RETRY_DELAY_SECONDS = float(os.environ.get("MQTT_FETCH_RETRY_DELAY_SECONDS", "1.5"))
+DEVICE_ID = os.environ.get("DEVICE_ID", "${device_id}")
+DEVICE_NAME = os.environ.get("DEVICE_NAME", "${device_name}")
+
+STATE_TOPIC = f"{MQTT_TOPIC_PREFIX}/state"
+AVAILABILITY_TOPIC = f"{MQTT_TOPIC_PREFIX}/availability"
+
+DEVICE = {
+    "identifiers": [DEVICE_ID],
+    "name": DEVICE_NAME,
+    "manufacturer": "Jason Cox",
+    "model": "pyPowerwall Bridge",
+    "sw_version": "pyPowerwall proxy",
+}
+
+IGNORED_ALERT_CODES = {
+    "FWUpdateSucceeded",
+    "SystemConnectedToGrid",
+}
+
+DEPRECATED_DISCOVERY_ENTITIES = [
+    {"component": "sensor", "object_id": "latest_alert_summary"},
+    {"component": "sensor", "object_id": "latest_alert_code"},
+    {"component": "sensor", "object_id": "fan1_actual"},
+    {"component": "sensor", "object_id": "fan1_target"},
+    {"component": "sensor", "object_id": "fan2_actual"},
+    {"component": "sensor", "object_id": "fan2_target"},
+]
+
+STATIC_SENSORS = [
+    {
+        "component": "sensor",
+        "object_id": "grid_power",
+        "name": "Grid Power",
+        "unit_of_measurement": "W",
+        "device_class": "power",
+        "state_class": "measurement",
+        "icon": "mdi:transmission-tower",
+        "value_template": "{{ value_json.aggregates.site.instant_power if value_json.aggregates.site is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "home_power",
+        "name": "Home Power",
+        "unit_of_measurement": "W",
+        "device_class": "power",
+        "state_class": "measurement",
+        "icon": "mdi:home-lightning-bolt",
+        "value_template": "{{ value_json.aggregates.load.instant_power if value_json.aggregates.load is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "solar_power",
+        "name": "Solar Power",
+        "unit_of_measurement": "W",
+        "device_class": "power",
+        "state_class": "measurement",
+        "icon": "mdi:solar-power",
+        "value_template": "{{ value_json.aggregates.solar.instant_power if value_json.aggregates.solar is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "battery_power",
+        "name": "Battery Power",
+        "unit_of_measurement": "W",
+        "device_class": "power",
+        "state_class": "measurement",
+        "icon": "mdi:battery-charging-medium",
+        "value_template": "{{ value_json.aggregates.battery.instant_power if value_json.aggregates.battery is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "battery_level",
+        "name": "Battery Level",
+        "unit_of_measurement": "%",
+        "device_class": "battery",
+        "state_class": "measurement",
+        "icon": "mdi:battery",
+        "value_template": "{{ value_json.soe.percentage if value_json.soe.percentage is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "battery_reserve",
+        "name": "Battery Reserve",
+        "unit_of_measurement": "%",
+        "device_class": "battery",
+        "state_class": "measurement",
+        "icon": "mdi:battery-lock",
+        "value_template": "{{ value_json.reserve.reserve if value_json.reserve is mapping and value_json.reserve.reserve is defined else value_json.reserve if value_json.reserve is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "battery_mode",
+        "name": "Battery Mode",
+        "icon": "mdi:battery-cog",
+        "value_template": "{{ value_json.mode.mode if value_json.mode is mapping and value_json.mode.mode is defined else value_json.mode if value_json.mode is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "firmware_version",
+        "name": "Firmware Version",
+        "icon": "mdi:chip",
+        "value_template": "{{ value_json.version.version if value_json.version is mapping and value_json.version.version is defined else value_json.version.tag if value_json.version is mapping and value_json.version.tag is defined else value_json.version if value_json.version is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "grid_status",
+        "name": "Grid Status",
+        "icon": "mdi:transmission-tower-export",
+        "value_template": "{{ value_json.grid_status.grid_status if value_json.grid_status is mapping and value_json.grid_status.grid_status is defined else value_json.grid_status if value_json.grid_status is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "alert_count",
+        "name": "Active Alert Count",
+        "icon": "mdi:alert-circle-outline",
+        "state_class": "measurement",
+        "value_template": "{{ value_json.alert_count if value_json.alert_count is defined else none }}",
+    },
+    {
+        "component": "binary_sensor",
+        "object_id": "alerts_active",
+        "name": "Alerts Active",
+        "device_class": "problem",
+        "icon": "mdi:alert",
+        "value_template": "{{ 'ON' if value_json.alert_count is defined and value_json.alert_count > 0 else 'OFF' }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "active_alerts_summary",
+        "name": "Active Alerts Summary",
+        "icon": "mdi:format-list-bulleted-square",
+        "value_template": "{{ value_json.active_alerts_summary | join(', ') if value_json.active_alerts_summary is mapping else value_json.active_alerts_summary if value_json.active_alerts_summary is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "battery_block_count",
+        "name": "Battery Block Count",
+        "icon": "mdi:battery-multiple",
+        "state_class": "measurement",
+        "value_template": "{{ value_json.battery_block_count if value_json.battery_block_count is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "battery_energy_to_charge",
+        "name": "Battery Energy To Charge",
+        "unit_of_measurement": "Wh",
+        "device_class": "energy",
+        "state_class": "measurement",
+        "icon": "mdi:battery-plus",
+        "value_template": "{{ value_json.vitals.pack.energy_to_charge if value_json.vitals is defined and value_json.vitals.pack is defined and value_json.vitals.pack.energy_to_charge is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "battery_inverter_power",
+        "name": "Battery Inverter Power",
+        "unit_of_measurement": "W",
+        "device_class": "power",
+        "state_class": "measurement",
+        "icon": "mdi:battery-sync",
+        "value_template": "{{ value_json.vitals.inverter.power if value_json.vitals is defined and value_json.vitals.inverter is defined and value_json.vitals.inverter.power is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "battery_inverter_voltage",
+        "name": "Battery Inverter Voltage",
+        "unit_of_measurement": "V",
+        "device_class": "voltage",
+        "state_class": "measurement",
+        "icon": "mdi:sine-wave",
+        "value_template": "{{ value_json.vitals.inverter.voltage if value_json.vitals is defined and value_json.vitals.inverter is defined and value_json.vitals.inverter.voltage is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "battery_inverter_split1_voltage",
+        "name": "Battery Inverter Split 1 Voltage",
+        "unit_of_measurement": "V",
+        "device_class": "voltage",
+        "state_class": "measurement",
+        "icon": "mdi:flash-triangle",
+        "value_template": "{{ value_json.vitals.inverter.split1_voltage if value_json.vitals is defined and value_json.vitals.inverter is defined and value_json.vitals.inverter.split1_voltage is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "battery_inverter_split2_voltage",
+        "name": "Battery Inverter Split 2 Voltage",
+        "unit_of_measurement": "V",
+        "device_class": "voltage",
+        "state_class": "measurement",
+        "icon": "mdi:flash-triangle",
+        "value_template": "{{ value_json.vitals.inverter.split2_voltage if value_json.vitals is defined and value_json.vitals.inverter is defined and value_json.vitals.inverter.split2_voltage is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "battery_inverter_frequency",
+        "name": "Battery Inverter Frequency",
+        "unit_of_measurement": "Hz",
+        "device_class": "frequency",
+        "state_class": "measurement",
+        "icon": "mdi:current-ac",
+        "value_template": "{{ value_json.vitals.inverter.frequency if value_json.vitals is defined and value_json.vitals.inverter is defined and value_json.vitals.inverter.frequency is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "battery_inverter_state",
+        "name": "Battery Inverter State",
+        "icon": "mdi:state-machine",
+        "value_template": "{{ value_json.vitals.inverter.state if value_json.vitals is defined and value_json.vitals.inverter is defined and value_json.vitals.inverter.state is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "sync_grid_connected",
+        "name": "Sync Grid Connected",
+        "icon": "mdi:transmission-tower-check",
+        "value_template": "{{ value_json.vitals.sync.grid_connected if value_json.vitals is defined and value_json.vitals.sync is defined and value_json.vitals.sync.grid_connected is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "sync_grid_state",
+        "name": "Sync Grid State",
+        "icon": "mdi:transmission-tower",
+        "value_template": "{{ value_json.vitals.sync.grid_state if value_json.vitals is defined and value_json.vitals.sync is defined and value_json.vitals.sync.grid_state is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "gateway_location",
+        "name": "Gateway Location",
+        "icon": "mdi:map-marker",
+        "value_template": "{{ value_json.vitals.gateway.location if value_json.vitals is defined and value_json.vitals.gateway is defined and value_json.vitals.gateway.location is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "gateway_alert_count",
+        "name": "Gateway Alert Count",
+        "icon": "mdi:alert-circle-outline",
+        "state_class": "measurement",
+        "value_template": "{{ value_json.gateway_alert_count if value_json.gateway_alert_count is defined else none }}",
+    },
+    {
+        "component": "binary_sensor",
+        "object_id": "gateway_alerts_active",
+        "name": "Gateway Alerts Active",
+        "device_class": "problem",
+        "icon": "mdi:alert",
+        "value_template": "{{ 'ON' if value_json.gateway_alert_count is defined and value_json.gateway_alert_count > 0 else 'OFF' }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "gateway_alerts_summary",
+        "name": "Gateway Alerts Summary",
+        "icon": "mdi:alert-box-outline",
+        "value_template": "{{ value_json.gateway_alerts_summary if value_json.gateway_alerts_summary is defined else none }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "pack_alert_count",
+        "name": "Pack Alert Count",
+        "icon": "mdi:alert-circle-outline",
+        "state_class": "measurement",
+        "value_template": "{{ value_json.pack_alert_count if value_json.pack_alert_count is defined else none }}",
+    },
+    {
+        "component": "binary_sensor",
+        "object_id": "pack_alerts_active",
+        "name": "Pack Alerts Active",
+        "device_class": "problem",
+        "icon": "mdi:alert",
+        "value_template": "{{ 'ON' if value_json.pack_alert_count is defined and value_json.pack_alert_count > 0 else 'OFF' }}",
+    },
+    {
+        "component": "sensor",
+        "object_id": "pack_alerts_summary",
+        "name": "Pack Alerts Summary",
+        "icon": "mdi:battery-alert",
+        "value_template": "{{ value_json.pack_alerts_summary if value_json.pack_alerts_summary is defined else none }}",
+    },
+]
+
+
+def sanitize(value: str) -> str:
+    return re.sub(r"[^a-z0-9_]+", "_", value.lower()).strip("_")
+
+
+ENTITY_PREFIX = sanitize(DEVICE_ID) or "powerwall_bridge"
+
+
+def scoped_object_id(object_id: str) -> str:
+    return f"{ENTITY_PREFIX}_{object_id}"
+
+
+def fetch_json(path: str):
+    url = f"{PROXY_URL}{path}"
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    attempts = FETCH_RETRIES + 1
+    last_error = None
+    payload = ""
+
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
+                payload = response.read().decode("utf-8").strip()
+            break
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"proxy HTTP error for {path} ({url}): {exc.code} {exc.reason}") from exc
+        except urllib.error.URLError as exc:
+            last_error = RuntimeError(
+                f"proxy request failed for {path} ({url}) attempt {attempt}/{attempts}: {exc.reason}"
+            )
+        except TimeoutError as exc:
+            last_error = RuntimeError(
+                f"proxy request timed out for {path} ({url}) attempt {attempt}/{attempts} after {FETCH_TIMEOUT_SECONDS:.1f}s"
+            )
+        except Exception as exc:
+            last_error = RuntimeError(
+                f"proxy request failed for {path} ({url}) attempt {attempt}/{attempts}: {exc}"
+            )
+
+        if attempt >= attempts:
+            raise last_error
+
+        time.sleep(FETCH_RETRY_DELAY_SECONDS * attempt)
+
+    if not payload or payload == "null":
+        return {}
+    return json.loads(payload)
+
+
+def discovery_topic(component: str, object_id: str) -> str:
+    scoped_id = scoped_object_id(object_id)
+    return f"{MQTT_DISCOVERY_PREFIX}/{component}/{DEVICE_ID}/{scoped_id}/config"
+
+
+def publish_discovery(client: mqtt.Client, definition: dict) -> None:
+    scoped_id = scoped_object_id(definition["object_id"])
+    payload = {
+        "name": definition["name"],
+        "object_id": scoped_id,
+        "unique_id": f"{DEVICE_ID}_{scoped_id}",
+        "state_topic": STATE_TOPIC,
+        "value_template": definition["value_template"],
+        "availability_topic": AVAILABILITY_TOPIC,
+        "payload_available": "online",
+        "payload_not_available": "offline",
+        "device": DEVICE,
+    }
+    for key in ["unit_of_measurement", "device_class", "state_class", "icon"]:
+        value = definition.get(key)
+        if value is not None:
+            payload[key] = value
+    if definition["component"] == "binary_sensor":
+        payload["payload_on"] = "ON"
+        payload["payload_off"] = "OFF"
+    client.publish(discovery_topic(definition["component"], definition["object_id"]), json.dumps(payload), retain=True)
+
+
+def clear_discovery(client: mqtt.Client, component: str, object_id: str) -> None:
+    client.publish(discovery_topic(component, object_id), "", retain=True)
+
+
+def publish_string_discovery(client: mqtt.Client, string_name: str) -> None:
+    string_key = sanitize(string_name)
+    label = string_name.upper()
+    definitions = [
+        {
+            "component": "sensor",
+            "object_id": f"string_{string_key}_power",
+            "name": f"String {label} Power",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "state_class": "measurement",
+            "icon": "mdi:solar-power-variant",
+            "value_template": f"{{{{ value_json.strings.{string_name}.Power if value_json.strings.{string_name} is defined else none }}}}",
+        },
+        {
+            "component": "sensor",
+            "object_id": f"string_{string_key}_voltage",
+            "name": f"String {label} Voltage",
+            "unit_of_measurement": "V",
+            "device_class": "voltage",
+            "state_class": "measurement",
+            "icon": "mdi:sine-wave",
+            "value_template": f"{{{{ value_json.strings.{string_name}.Voltage if value_json.strings.{string_name} is defined else none }}}}",
+        },
+        {
+            "component": "sensor",
+            "object_id": f"string_{string_key}_current",
+            "name": f"String {label} Current",
+            "unit_of_measurement": "A",
+            "device_class": "current",
+            "state_class": "measurement",
+            "icon": "mdi:current-dc",
+            "value_template": f"{{{{ value_json.strings.{string_name}.Current if value_json.strings.{string_name} is defined else none }}}}",
+        },
+        {
+            "component": "sensor",
+            "object_id": f"string_{string_key}_state",
+            "name": f"String {label} State",
+            "icon": "mdi:solar-panel-large",
+            "value_template": f"{{{{ value_json.strings.{string_name}.State if value_json.strings.{string_name} is defined else none }}}}",
+        },
+        {
+            "component": "binary_sensor",
+            "object_id": f"string_{string_key}_connected",
+            "name": f"String {label} Connected",
+            "device_class": "connectivity",
+            "icon": "mdi:lan-connect",
+            "value_template": f"{{{{ 'ON' if value_json.strings.{string_name}.Connected else 'OFF' if value_json.strings.{string_name} is defined else 'OFF' }}}}",
+        },
+    ]
+    for definition in definitions:
+        publish_discovery(client, definition)
+
+
+def publish_battery_block_discovery(client: mqtt.Client, block_name: str) -> None:
+    block_key = sanitize(block_name)
+    definitions = [
+        {
+            "component": "sensor",
+            "object_id": f"battery_block_{block_key}_power",
+            "name": f"Battery Block {block_name} Power",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "state_class": "measurement",
+            "icon": "mdi:battery-charging-outline",
+            "value_template": f"{{{{ value_json.battery_blocks.get('{block_name}', {{}}).get('p_out') if value_json.battery_blocks is defined else none }}}}",
+        },
+        {
+            "component": "sensor",
+            "object_id": f"battery_block_{block_key}_voltage",
+            "name": f"Battery Block {block_name} Voltage",
+            "unit_of_measurement": "V",
+            "device_class": "voltage",
+            "state_class": "measurement",
+            "icon": "mdi:sine-wave",
+            "value_template": f"{{{{ value_json.battery_blocks.get('{block_name}', {{}}).get('v_out') if value_json.battery_blocks is defined else none }}}}",
+        },
+        {
+            "component": "sensor",
+            "object_id": f"battery_block_{block_key}_frequency",
+            "name": f"Battery Block {block_name} Frequency",
+            "unit_of_measurement": "Hz",
+            "device_class": "frequency",
+            "state_class": "measurement",
+            "icon": "mdi:current-ac",
+            "value_template": f"{{{{ value_json.battery_blocks.get('{block_name}', {{}}).get('f_out') if value_json.battery_blocks is defined else none }}}}",
+        },
+        {
+            "component": "sensor",
+            "object_id": f"battery_block_{block_key}_nominal_energy_remaining",
+            "name": f"Battery Block {block_name} Remaining Energy",
+            "unit_of_measurement": "Wh",
+            "device_class": "energy",
+            "state_class": "measurement",
+            "icon": "mdi:battery-medium",
+            "value_template": f"{{{{ value_json.battery_blocks.get('{block_name}', {{}}).get('nominal_energy_remaining') if value_json.battery_blocks is defined else none }}}}",
+        },
+        {
+            "component": "sensor",
+            "object_id": f"battery_block_{block_key}_pinv_state",
+            "name": f"Battery Block {block_name} Inverter State",
+            "icon": "mdi:state-machine",
+            "value_template": f"{{{{ value_json.battery_blocks.get('{block_name}', {{}}).get('pinv_state') if value_json.battery_blocks is defined else none }}}}",
+        },
+        {
+            "component": "sensor",
+            "object_id": f"battery_block_{block_key}_grid_state",
+            "name": f"Battery Block {block_name} Grid State",
+            "icon": "mdi:transmission-tower",
+            "value_template": f"{{{{ value_json.battery_blocks.get('{block_name}', {{}}).get('pinv_grid_state') if value_json.battery_blocks is defined else none }}}}",
+        },
+        {
+            "component": "sensor",
+            "object_id": f"battery_block_{block_key}_package_part_number",
+            "name": f"Battery Block {block_name} Package Part Number",
+            "icon": "mdi:identifier",
+            "value_template": f"{{{{ value_json.battery_blocks.get('{block_name}', {{}}).get('PackagePartNumber') if value_json.battery_blocks is defined else none }}}}",
+        },
+        {
+            "component": "sensor",
+            "object_id": f"battery_block_{block_key}_type",
+            "name": f"Battery Block {block_name} Type",
+            "icon": "mdi:battery-outline",
+            "value_template": f"{{{{ value_json.battery_blocks.get('{block_name}', {{}}).get('Type') if value_json.battery_blocks is defined else none }}}}",
+        },
+        {
+            "component": "sensor",
+            "object_id": f"battery_block_{block_key}_nominal_full_energy",
+            "name": f"Battery Block {block_name} Full Energy",
+            "unit_of_measurement": "Wh",
+            "device_class": "energy",
+            "state_class": "measurement",
+            "icon": "mdi:battery-high",
+            "value_template": f"{{{{ value_json.battery_blocks.get('{block_name}', {{}}).get('nominal_full_pack_energy') if value_json.battery_blocks is defined else none }}}}",
+        },
+        {
+            "component": "sensor",
+            "object_id": f"battery_block_{block_key}_disabled_reasons_count",
+            "name": f"Battery Block {block_name} Disabled Reason Count",
+            "icon": "mdi:alert-circle-outline",
+            "state_class": "measurement",
+            "value_template": f"{{{{ value_json.battery_blocks.get('{block_name}', {{}}).get('disabled_reasons', []) | count if value_json.battery_blocks is defined else none }}}}",
+        },
+        {
+            "component": "sensor",
+            "object_id": f"battery_block_{block_key}_disabled_reasons",
+            "name": f"Battery Block {block_name} Disabled Reasons",
+            "icon": "mdi:alert-box-outline",
+            "value_template": f"{{{{ value_json.battery_blocks.get('{block_name}', {{}}).get('disabled_reasons', []) | join('; ') if value_json.battery_blocks is defined else none }}}}",
+        },
+        {
+            "component": "binary_sensor",
+            "object_id": f"battery_block_{block_key}_disabled",
+            "name": f"Battery Block {block_name} Disabled",
+            "device_class": "problem",
+            "icon": "mdi:battery-off-outline",
+            "value_template": f"{{{{ 'ON' if value_json.battery_blocks is defined and value_json.battery_blocks.get('{block_name}', {{}}).get('disabled_reasons', []) | count > 0 else 'OFF' }}}}",
+        },
+        {
+            "component": "binary_sensor",
+            "object_id": f"battery_block_{block_key}_backup_ready",
+            "name": f"Battery Block {block_name} Backup Ready",
+            "icon": "mdi:battery-check",
+            "value_template": f"{{{{ 'ON' if value_json.battery_blocks is defined and value_json.battery_blocks.get('{block_name}', {{}}).get('backup_ready') else 'OFF' if value_json.battery_blocks is defined and value_json.battery_blocks.get('{block_name}', {{}}).get('backup_ready') is sameas false else none }}}}",
+        },
+        {
+            "component": "binary_sensor",
+            "object_id": f"battery_block_{block_key}_off_grid",
+            "name": f"Battery Block {block_name} Off Grid",
+            "device_class": "power",
+            "icon": "mdi:transmission-tower-off",
+            "value_template": f"{{{{ 'ON' if value_json.battery_blocks is defined and value_json.battery_blocks.get('{block_name}', {{}}).get('off_grid') else 'OFF' if value_json.battery_blocks is defined and value_json.battery_blocks.get('{block_name}', {{}}).get('off_grid') is sameas false else none }}}}",
+        },
+    ]
+    for definition in definitions:
+        publish_discovery(client, definition)
+
+
+def prefer_current_value(current, previous):
+    if current is None:
+        return previous
+    if isinstance(current, dict) and not current:
+        return previous if previous is not None else {}
+    if isinstance(current, list) and not current:
+        return previous if previous is not None else []
+    if current == "":
+        return previous
+    return current
+
+
+def normalize_reserve(value):
+    if isinstance(value, dict):
+        for key in ["reserve", "value", "percentage"]:
+            nested = value.get(key)
+            if isinstance(nested, (int, float, str)):
+                return nested
+        return None
+    if isinstance(value, (int, float, str)):
+        return value
+    return None
+
+
+def normalize_mode(value):
+    if isinstance(value, dict):
+        nested = value.get("mode")
+        if isinstance(nested, str):
+            return nested
+        return None
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def normalize_version(value):
+    if isinstance(value, dict):
+        for key in ["version", "tag"]:
+            nested = value.get(key)
+            if isinstance(nested, str):
+                return nested
+        return None
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def normalize_grid_status(value):
+    if isinstance(value, dict):
+        nested = value.get("grid_status")
+        if isinstance(nested, str):
+            return nested
+        return None
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def normalize_vitals(value):
+    if not isinstance(value, dict):
+        return {}
+
+    vitals = {
+        "gateway": {},
+        "inverter": {},
+        "pack": {},
+        "sync": {},
+    }
+
+    for component_name, component_data in value.items():
+        if not isinstance(component_data, dict):
+            continue
+
+        if component_name.startswith("STSTSM"):
+            location = component_data.get("STSTSM-Location")
+            if isinstance(location, str) and location:
+                vitals["gateway"]["location"] = location
+            if isinstance(component_data.get("alerts"), list):
+                vitals["gateway"]["alerts"] = [label for item in component_data["alerts"] if (label := normalize_alert_label(item)) is not None]
+
+        if component_name.startswith("TEPINV"):
+            if isinstance(component_data.get("PINV_Pout"), (int, float)):
+                vitals["inverter"]["power"] = component_data["PINV_Pout"]
+            if isinstance(component_data.get("PINV_Vout"), (int, float)):
+                vitals["inverter"]["voltage"] = component_data["PINV_Vout"]
+            if isinstance(component_data.get("PINV_VSplit1"), (int, float)):
+                vitals["inverter"]["split1_voltage"] = component_data["PINV_VSplit1"]
+            if isinstance(component_data.get("PINV_VSplit2"), (int, float)):
+                vitals["inverter"]["split2_voltage"] = component_data["PINV_VSplit2"]
+            if isinstance(component_data.get("PINV_Fout"), (int, float)):
+                vitals["inverter"]["frequency"] = component_data["PINV_Fout"]
+            if isinstance(component_data.get("PINV_State"), str):
+                vitals["inverter"]["state"] = component_data["PINV_State"]
+
+        if component_name.startswith("TEPOD"):
+            if isinstance(component_data.get("POD_nom_energy_to_be_charged"), (int, float)):
+                vitals["pack"]["energy_to_charge"] = component_data["POD_nom_energy_to_be_charged"]
+            if isinstance(component_data.get("alerts"), list):
+                vitals["pack"]["alerts"] = [label for item in component_data["alerts"] if (label := normalize_alert_label(item)) is not None]
+
+        if component_name.startswith("TESYNC"):
+            if isinstance(component_data.get("ISLAND_GridConnected"), str):
+                vitals["sync"]["grid_connected"] = component_data["ISLAND_GridConnected"]
+            if isinstance(component_data.get("ISLAND_GridState"), str):
+                vitals["sync"]["grid_state"] = component_data["ISLAND_GridState"]
+
+    return vitals
+
+
+def normalize_alert_label(value) -> str | None:
+    if value in [None, ""]:
+        return None
+
+    label = str(value).strip()
+    if not label or label in IGNORED_ALERT_CODES:
+        return None
+    return label
+
+
+def summarize_names(values) -> str | None:
+    if not isinstance(values, list):
+        return None
+
+    labels = []
+    for value in values:
+        label = normalize_alert_label(value)
+        if label and label not in labels:
+            labels.append(label)
+
+    if not labels:
+        return None
+    if len(labels) <= 3:
+        return "; ".join(labels)
+    return f"{'; '.join(labels[:3])}; +{len(labels) - 3} more"
+
+
+def alert_object_has_meaningful_data(value: dict) -> bool:
+    if not isinstance(value, dict) or not value:
+        return False
+    if isinstance(value.get("grid_faults"), list) and value["grid_faults"]:
+        return True
+    if first_alert_value(value, ["description", "message", "decoded_alert", "name", "title", "alert_name", "code"]) is not None:
+        return True
+    return bool(active_mapping_keys(value))
+
+
+def alert_items(alerts, alerts_pw):
+    if isinstance(alerts_pw, dict) and alerts_pw:
+        if isinstance(alerts_pw.get("grid_faults"), list) and alerts_pw["grid_faults"]:
+            return alerts_pw["grid_faults"]
+        if alert_object_has_meaningful_data(alerts_pw):
+            return [alerts_pw]
+        return []
+    if isinstance(alerts, list):
+        return [label for alert in alerts if (label := normalize_alert_label(alert)) is not None]
+    return []
+
+
+def first_alert_value(alert: dict, keys: list[str]) -> str | None:
+    for key in keys:
+        value = alert.get(key)
+        if value not in [None, ""]:
+            return str(value)
+    return None
+
+
+def active_mapping_keys(value: dict) -> list[str]:
+    keys = []
+    for key, nested in value.items():
+        if key in IGNORED_ALERT_CODES:
+            continue
+        if nested in [1, True, "1", "true", "True", "active", "Active"]:
+            keys.append(str(key))
+    return keys
+
+
+def latest_alert(alerts):
+    if not isinstance(alerts, list) or not alerts:
+        return None
+
+    latest = alerts[0]
+    return latest if isinstance(latest, dict) else None
+
+
+def alert_summary(alerts, alerts_pw) -> str | None:
+    items = alert_items(alerts, alerts_pw)
+    if not items:
+        if isinstance(alerts, dict) and alerts:
+            active_keys = active_mapping_keys(alerts)
+            if active_keys:
+                return "; ".join(active_keys[:3]) if len(active_keys) <= 3 else f"{'; '.join(active_keys[:3])}; +{len(active_keys) - 3} more"
+        return None
+
+    latest = items[0]
+    if not isinstance(latest, dict):
+        return str(latest)
+
+    summary = first_alert_value(latest, ["description", "message", "decoded_alert", "name", "title", "alert_name", "code"])
+    if summary is not None:
+        return summary
+
+    active_keys = active_mapping_keys(latest)
+    if active_keys:
+        return "; ".join(active_keys[:3]) if len(active_keys) <= 3 else f"{'; '.join(active_keys[:3])}; +{len(active_keys) - 3} more"
+
+    return json.dumps(latest, sort_keys=True)
+
+
+def alert_code(alerts, alerts_pw) -> str | None:
+    if isinstance(alerts, dict) and alerts:
+        active_keys = active_mapping_keys(alerts)
+        if active_keys:
+            return active_keys[0]
+
+    items = alert_items(alerts, alerts_pw)
+    if items and not isinstance(items[0], dict):
+        return str(items[0])
+
+    latest = latest_alert(items)
+    if latest is None:
+        return None
+
+    return first_alert_value(latest, ["code", "alert_name", "name", "title"])
+
+
+def active_alerts_summary(alerts, alerts_pw) -> str | None:
+    items = alert_items(alerts, alerts_pw)
+    if not items:
+        if isinstance(alerts, dict) and alerts:
+            labels = active_mapping_keys(alerts)
+            if labels:
+                return "; ".join(labels[:3]) if len(labels) <= 3 else f"{'; '.join(labels[:3])}; +{len(labels) - 3} more"
+        return None
+
+    labels = []
+    for alert in items:
+        if isinstance(alert, dict):
+            label = first_alert_value(alert, ["description", "message", "decoded_alert", "name", "title", "alert_name", "code"])
+        else:
+            label = str(alert)
+        if label and label not in labels:
+            labels.append(label)
+
+    if not labels:
+        return None
+
+    if len(labels) <= 3:
+        return "; ".join(labels)
+
+    return f"{'; '.join(labels[:3])}; +{len(labels) - 3} more"
+
+
+def snapshot_is_ready(snapshot: dict) -> bool:
+    aggregates = snapshot.get("aggregates")
+    soe = snapshot.get("soe")
+
+    if not isinstance(aggregates, dict) or not aggregates:
+        return False
+    if not isinstance(soe, dict) or "percentage" not in soe:
+        return False
+
+    required_aggregate_sections = ["site", "load", "solar", "battery"]
+    return all(isinstance(aggregates.get(section), dict) for section in required_aggregate_sections)
+
+
+def snapshot_readiness_error(snapshot: dict) -> str:
+    aggregates = snapshot.get("aggregates")
+    soe = snapshot.get("soe")
+
+    if not isinstance(aggregates, dict) or not aggregates:
+        return "missing aggregates"
+    if not isinstance(soe, dict) or "percentage" not in soe:
+        return "missing soe.percentage"
+
+    missing_sections = [
+        section
+        for section in ["site", "load", "solar", "battery"]
+        if not isinstance(aggregates.get(section), dict)
+    ]
+    if missing_sections:
+        return f"missing aggregate sections: {', '.join(missing_sections)}"
+
+    return "unknown readiness failure"
+
+
+def _summary_fields(snapshot: dict, is_replayed: bool = False, error: str | None = None, duration_ms: int | None = None) -> dict:
+    aggregates = snapshot.get("aggregates") if isinstance(snapshot, dict) else {}
+    site = aggregates.get("site") if isinstance(aggregates, dict) else {}
+    load = aggregates.get("load") if isinstance(aggregates, dict) else {}
+    solar = aggregates.get("solar") if isinstance(aggregates, dict) else {}
+    battery = aggregates.get("battery") if isinstance(aggregates, dict) else {}
+
+    fields = {
+        "replayed": "yes" if is_replayed else "no",
+        "available_alerts": snapshot.get("alert_count", "n/a"),
+        "reserve": snapshot.get("reserve", "n/a"),
+        "soe": snapshot.get("soe", {}).get("percentage", "n/a") if isinstance(snapshot.get("soe"), dict) else "n/a",
+        "site": site.get("instant_power", "n/a") if isinstance(site, dict) else "n/a",
+        "load": load.get("instant_power", "n/a") if isinstance(load, dict) else "n/a",
+        "solar": solar.get("instant_power", "n/a") if isinstance(solar, dict) else "n/a",
+        "battery": battery.get("instant_power", "n/a") if isinstance(battery, dict) else "n/a",
+        "strings": len(snapshot.get("strings", {})) if isinstance(snapshot.get("strings"), dict) else 0,
+        "blocks": len(snapshot.get("battery_blocks", {})) if isinstance(snapshot.get("battery_blocks"), dict) else 0,
+    }
+    if duration_ms is not None:
+        fields["duration_ms"] = duration_ms
+    if error:
+        fields["error"] = error
+    return fields
+
+
+LAST_LOGGED_SUMMARY = {"snapshot": None, "time": 0.0}
+
+
+def log_publish_summary(snapshot: dict, is_replayed: bool = False, error: str | None = None, duration_ms: int | None = None) -> None:
+    fields = _summary_fields(snapshot, is_replayed=is_replayed, error=error, duration_ms=duration_ms)
+    snapshot_key = tuple((key, str(value)) for key, value in fields.items())
+    now = time.time()
+    should_log = LAST_LOGGED_SUMMARY["snapshot"] != snapshot_key
+
+    if not should_log and STATUS_LOG_INTERVAL_SECONDS > 0:
+        should_log = (now - LAST_LOGGED_SUMMARY["time"]) >= STATUS_LOG_INTERVAL_SECONDS
+
+    if not should_log:
+        return
+
+    LAST_LOGGED_SUMMARY["snapshot"] = snapshot_key
+    LAST_LOGGED_SUMMARY["time"] = now
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    rendered_fields = [f"{key}={value}" for key, value in fields.items()]
+    print(f"{timestamp} mqtt publisher cycle: " + " ".join(rendered_fields), file=sys.stderr, flush=True)
+
+
+def build_snapshot(previous_snapshot: dict | None = None) -> dict:
+    previous_snapshot = previous_snapshot or {}
+
+    alerts = prefer_current_value(fetch_json("/alerts"), previous_snapshot.get("alerts"))
+    alerts_pw = prefer_current_value(fetch_json("/alerts/pw"), previous_snapshot.get("alerts_pw"))
+    battery_blocks = prefer_current_value(fetch_json("/pw/battery_blocks"), previous_snapshot.get("battery_blocks"))
+    reserve = prefer_current_value(normalize_reserve(fetch_json("/pw/get_reserve")), previous_snapshot.get("reserve"))
+    version = prefer_current_value(normalize_version(fetch_json("/version")), previous_snapshot.get("version"))
+    grid_status = prefer_current_value(normalize_grid_status(fetch_json("/pw/grid_status")), previous_snapshot.get("grid_status"))
+    mode = prefer_current_value(normalize_mode(fetch_json("/pw/get_mode")), previous_snapshot.get("mode"))
+    vitals = prefer_current_value(normalize_vitals(fetch_json("/vitals")), previous_snapshot.get("vitals"))
+    effective_alerts = alert_items(alerts, alerts_pw)
+    gateway_alerts = vitals.get("gateway", {}).get("alerts", []) if isinstance(vitals, dict) else []
+    pack_alerts = vitals.get("pack", {}).get("alerts", []) if isinstance(vitals, dict) else []
+
+    snapshot = {
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "aggregates": prefer_current_value(fetch_json("/aggregates"), previous_snapshot.get("aggregates")),
+        "soe": prefer_current_value(fetch_json("/soe"), previous_snapshot.get("soe")),
+        "strings": prefer_current_value(fetch_json("/strings"), previous_snapshot.get("strings")),
+        "health": prefer_current_value(fetch_json("/health"), previous_snapshot.get("health")),
+        "version": version,
+        "grid_status": grid_status,
+        "reserve": reserve,
+        "mode": mode,
+        "alerts": alerts,
+        "alerts_pw": alerts_pw if isinstance(alerts_pw, dict) else previous_snapshot.get("alerts_pw", {}),
+        "alert_count": len(effective_alerts),
+        "active_alerts_summary": prefer_current_value(active_alerts_summary(alerts, alerts_pw), previous_snapshot.get("active_alerts_summary")),
+        "gateway_alert_count": len(gateway_alerts),
+        "gateway_alerts_summary": prefer_current_value(summarize_names(gateway_alerts), previous_snapshot.get("gateway_alerts_summary")),
+        "pack_alert_count": len(pack_alerts),
+        "pack_alerts_summary": prefer_current_value(summarize_names(pack_alerts), previous_snapshot.get("pack_alerts_summary")),
+        "battery_blocks": battery_blocks,
+        "battery_block_count": len(battery_blocks) if isinstance(battery_blocks, dict) else previous_snapshot.get("battery_block_count", 0),
+        "vitals": vitals if isinstance(vitals, dict) else previous_snapshot.get("vitals", {}),
+    }
+
+    return snapshot
+
+
+def main() -> int:
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
+    if MQTT_USERNAME:
+        client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+    client.connect(MQTT_HOST, MQTT_PORT, 60)
+    client.loop_start()
+
+    stop = {"value": False}
+
+    def handle_signal(signum, frame):
+        del signum, frame
+        stop["value"] = True
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    for entity in DEPRECATED_DISCOVERY_ENTITIES:
+        clear_discovery(client, entity["component"], entity["object_id"])
+
+    for definition in STATIC_SENSORS:
+        publish_discovery(client, definition)
+
+    published_string_keys = set()
+    published_battery_block_keys = set()
+    consecutive_failures = 0
+    is_available = False
+    last_snapshot = None
+
+    while not stop["value"]:
+        cycle_started_at = time.monotonic()
+        try:
+            snapshot = build_snapshot(last_snapshot)
+            if not snapshot_is_ready(snapshot):
+                raise RuntimeError(f"core proxy data unavailable: {snapshot_readiness_error(snapshot)}")
+
+            last_snapshot = snapshot
+            string_keys = set(snapshot.get("strings", {}).keys())
+            for string_name in sorted(string_keys - published_string_keys):
+                publish_string_discovery(client, string_name)
+            published_string_keys = string_keys
+
+            battery_block_keys = set(snapshot.get("battery_blocks", {}).keys())
+            for block_name in sorted(battery_block_keys - published_battery_block_keys):
+                publish_battery_block_discovery(client, block_name)
+            published_battery_block_keys = battery_block_keys
+
+            consecutive_failures = 0
+
+            client.publish(STATE_TOPIC, json.dumps(snapshot), retain=MQTT_RETAIN)
+            duration_ms = int((time.monotonic() - cycle_started_at) * 1000)
+            log_publish_summary(snapshot, duration_ms=duration_ms)
+            if not is_available:
+                client.publish(AVAILABILITY_TOPIC, "online", retain=True)
+                is_available = True
+        except Exception as exc:
+            duration_ms = int((time.monotonic() - cycle_started_at) * 1000)
+            consecutive_failures += 1
+            print(
+                f"mqtt publisher error ({consecutive_failures}/{FAILURES_BEFORE_OFFLINE}): {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            print(traceback.format_exc(), file=sys.stderr, flush=True)
+            if last_snapshot is not None:
+                client.publish(STATE_TOPIC, json.dumps(last_snapshot), retain=MQTT_RETAIN)
+                log_publish_summary(last_snapshot, is_replayed=True, error=str(exc), duration_ms=duration_ms)
+            if consecutive_failures >= FAILURES_BEFORE_OFFLINE and is_available:
+                client.publish(AVAILABILITY_TOPIC, "offline", retain=True)
+                is_available = False
+        time.sleep(PUBLISH_INTERVAL)
+
+    if is_available:
+        client.publish(AVAILABILITY_TOPIC, "offline", retain=True)
+    client.loop_stop()
+    client.disconnect()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,17 @@
+[Unit]
+Description=Powerwall MQTT publisher for Home Assistant
+After=network-online.target powerwall-proxy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=${env_file}
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=append:/var/log/powerwall-mqtt-publisher.log
+StandardError=append:/var/log/powerwall-mqtt-publisher.log
+ExecStart=/opt/powerwall-bridge/venv/bin/python ${publisher_path}
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
