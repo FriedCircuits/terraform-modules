@@ -1,0 +1,13 @@
+[Unit]
+Description=Powerwall TEDAPI route
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -lc 'ip route replace ${destination} via ${gateway} dev ${interface}%{ if onlink } onlink%{ endif }'
+ExecStop=/bin/sh -lc 'ip route del ${destination} via ${gateway} dev ${interface}%{ if onlink } onlink%{ endif } || true'
+
+[Install]
+WantedBy=multi-user.target

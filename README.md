@@ -5,6 +5,7 @@ Hodgepodge of Terraform modules.
    * Actions Secrets - Deploys secrets to Github Actions. (AWS IAM User option)
 
 * Proxmox
+   * Powerwall Bridge (Deploys a pyPowerwall bridge in an LXC with optional MQTT publishing)
    * VM Clone (Create VMs from templates created by packer)
    * VM (Create VM with cloud-init and auto download ISO)
 

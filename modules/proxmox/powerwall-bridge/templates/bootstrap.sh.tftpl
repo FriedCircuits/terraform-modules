@@ -1,0 +1,80 @@
+#!/bin/sh
+set -eu
+
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update
+apt-get install -y ${packages}
+
+install -d -m 0755 /etc/powerwall-bridge /opt/powerwall-bridge /usr/local/lib/powerwall-bridge /var/lib/powerwall-bridge
+
+if [ ! -d /opt/powerwall-bridge/src/.git ]; then
+  rm -rf /opt/powerwall-bridge/src
+  git clone https://github.com/jasonacox/pypowerwall.git /opt/powerwall-bridge/src
+fi
+
+git -C /opt/powerwall-bridge/src fetch --force origin
+git -C /opt/powerwall-bridge/src fetch --tags --force origin
+git -C /opt/powerwall-bridge/src checkout --force ${repo_ref}
+
+python3 -m venv /opt/powerwall-bridge/venv
+/opt/powerwall-bridge/venv/bin/pip install --upgrade pip
+/opt/powerwall-bridge/venv/bin/pip install --no-cache-dir -r /opt/powerwall-bridge/src/proxy/requirements.txt paho-mqtt==2.1.0
+
+printf %s '${proxy_env_b64}' | base64 -d >/etc/powerwall-bridge/proxy.env
+chmod 0600 /etc/powerwall-bridge/proxy.env
+
+printf %s '${proxy_service_unit_b64}' | base64 -d >/etc/systemd/system/powerwall-proxy.service
+chmod 0644 /etc/systemd/system/powerwall-proxy.service
+
+%{ if write_rsa_key ~}
+printf %s '${rsa_key_b64}' | base64 -d >/etc/powerwall-bridge/tedapi_rsa_private.pem
+chmod 0600 /etc/powerwall-bridge/tedapi_rsa_private.pem
+%{ else ~}
+rm -f /etc/powerwall-bridge/tedapi_rsa_private.pem
+%{ endif ~}
+
+%{ if enable_mqtt_publisher ~}
+printf %s '${mqtt_env_b64}' | base64 -d >/etc/powerwall-bridge/mqtt.env
+chmod 0600 /etc/powerwall-bridge/mqtt.env
+
+printf %s '${mqtt_publisher_script_b64}' | base64 -d >/usr/local/lib/powerwall-bridge/mqtt_publisher.py
+chmod 0755 /usr/local/lib/powerwall-bridge/mqtt_publisher.py
+
+printf %s '${mqtt_service_unit_b64}' | base64 -d >/etc/systemd/system/powerwall-mqtt-publisher.service
+chmod 0644 /etc/systemd/system/powerwall-mqtt-publisher.service
+%{ else ~}
+rm -f /etc/powerwall-bridge/mqtt.env
+rm -f /usr/local/lib/powerwall-bridge/mqtt_publisher.py
+rm -f /etc/systemd/system/powerwall-mqtt-publisher.service
+%{ endif ~}
+
+%{ if enable_route_service ~}
+printf %s '${route_service_unit_b64}' | base64 -d >/etc/systemd/system/powerwall-route.service
+chmod 0644 /etc/systemd/system/powerwall-route.service
+%{ else ~}
+rm -f /etc/systemd/system/powerwall-route.service
+%{ endif ~}
+
+systemctl daemon-reload
+
+%{ if enable_route_service ~}
+systemctl enable powerwall-route.service >/dev/null 2>&1 || true
+systemctl restart powerwall-route.service
+%{ else ~}
+systemctl disable powerwall-route.service >/dev/null 2>&1 || true
+%{ endif ~}
+
+%{ if enable_proxy_service ~}
+systemctl enable powerwall-proxy.service >/dev/null 2>&1 || true
+systemctl restart powerwall-proxy.service
+%{ else ~}
+systemctl disable powerwall-proxy.service >/dev/null 2>&1 || true
+%{ endif ~}
+
+%{ if enable_mqtt_publisher ~}
+systemctl enable powerwall-mqtt-publisher.service >/dev/null 2>&1 || true
+systemctl restart powerwall-mqtt-publisher.service
+%{ else ~}
+systemctl disable powerwall-mqtt-publisher.service >/dev/null 2>&1 || true
+%{ endif ~}
