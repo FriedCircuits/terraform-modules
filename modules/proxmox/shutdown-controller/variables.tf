@@ -297,6 +297,12 @@ variable "talosctl_version" {
   default     = "v1.11.2"
 }
 
+variable "controller_version" {
+  description = "Version string exposed by the controller in MQTT state and Home Assistant. Defaults to the repository VERSION file when unset."
+  type        = string
+  default     = null
+}
+
 variable "kubeconfig_content" {
   description = "Optional kubeconfig content written to the controller container."
   type        = string

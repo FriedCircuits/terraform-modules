@@ -119,9 +119,12 @@ module "shutdown_controller" {
 - The controller defaults to dry-run mode. Use `controller_environment` to set `DRY_RUN=false` and tune the runtime thresholds once the shutdown flow is ready.
 - `STATUS_LOG_INTERVAL_SECONDS` defaults to `0`, which logs UPS status changes only. Set it to a positive value if you want a periodic heartbeat for unchanged status.
 - The built-in controller writes to `/var/log/shutdown-controller.log` by default because this has been more reliable than journald or the Proxmox LXC console.
-- When `mqtt` is configured, the controller publishes retained controller state to `<topic_prefix>/state`, keeps a compatibility copy at `<topic_prefix>/status`, publishes transient event messages to `<topic_prefix>/event`, and publishes Home Assistant MQTT discovery topics by default.
+- When `mqtt` is configured, the controller publishes retained live controller state to `<topic_prefix>/state`, keeps a compatibility copy at `<topic_prefix>/status`, publishes retained last-completed incident summary data to `<topic_prefix>/summary`, keeps `<topic_prefix>/incident` as a compatibility copy of that summary payload, publishes transient event messages to `<topic_prefix>/event`, and publishes Home Assistant MQTT discovery topics by default.
+- Live state now focuses on what the controller is doing now: UPS link, battery state, current incident state, recovery blocker, controller phase, last action, and first-class failure fields.
+- The retained summary payload keeps the last completed incident record with trigger reason, timestamps, duration, recovery outcome, and last action so short outages can still be explained later from Home Assistant without polluting the live state.
 - MQTT publish failures are logged, but they do not stop the controller or recovery flow.
 - Home Assistant discovery is retried periodically, not just once at startup. This avoids missing discovery when the broker or network is not ready during boot.
+- `controller_version` defaults to the repository `VERSION` file and is exposed in MQTT and Home Assistant. Override it if you need a different release string.
 - Ceph actions are expected to run through Kubernetes, for example via `kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph ...`.
 - `talos_nodes` entries are passed directly to `talosctl -n`. Hostnames work as long as the controller container can resolve and reach them. IPs avoid a DNS dependency, but only make sense when those node addresses are stable. Use whichever identifier is more reliable in your environment during an outage.
 - `linux_shutdown_targets` are shut down over SSH and default to `sudo systemctl poweroff`. Each target can override `user`, `port`, or `command` individually.
@@ -131,6 +134,32 @@ module "shutdown_controller" {
 - The module also installs a one-shot `shutdown-controller-recovery.service` by default. It runs on LXC boot, waits for line power and healthy Ceph, then unsets `noout` safely.
 - Omit `pve_api` entirely if the controller does not need to make Proxmox API calls from inside the container.
 - This module owns the `proxmox` provider configuration so it can safely compose the child `lxc` module. Keep that provider configuration at this level or above when calling it from Terragrunt.
+
+## Lifecycle And Deployment
+
+The deployment flow is intentionally explicit:
+
+1. Terraform renders the controller environment, controller script, recovery script, and systemd units.
+2. Terraform uploads the rendered bootstrap and Proxmox hook scripts as snippet files.
+3. The Proxmox LXC `post-start` hook runs on the host, then schedules an async bootstrap apply.
+4. The host-side async job pushes the bootstrap into the container and executes it.
+5. The bootstrap installs binaries, writes `/etc/shutdown-controller/controller.env`, writes the controller and recovery scripts, and enables the systemd units.
+6. `shutdown-controller.service` starts the long-running UPS poll loop.
+7. `shutdown-controller-recovery.service` runs on boot as a one-shot helper when recovery is needed.
+
+Operationally, that means the normal update path is:
+
+1. Change Terraform, the built-in controller template, or recovery template.
+2. Run `terragrunt apply`.
+3. Restart the LXC once if you need the `post-start` hook to rerun immediately.
+4. Verify host hook logs, in-container bootstrap logs, and the installed controller version sensor in Home Assistant.
+
+Useful verification points:
+
+- host: `/var/log/shutdown-controller-hook.log`
+- container: `/var/log/shutdown-controller-bootstrap.log`
+- container: `/usr/local/sbin/shutdown-controller`
+- MQTT: `<topic_prefix>/state`, `<topic_prefix>/summary`, `<topic_prefix>/event`
 
 ## Recovery
 
@@ -199,8 +228,10 @@ mqtt_credentials = {
 
 MQTT topic behavior:
 
-- `<topic_prefix>/state`: retained JSON snapshot of controller-specific state for Home Assistant and other consumers
-- `<topic_prefix>/status`: retained compatibility copy of the same JSON payload
+- `<topic_prefix>/state`: retained live JSON snapshot for current controller, UPS, recovery, and failure state
+- `<topic_prefix>/status`: retained compatibility copy of the same live JSON payload
+- `<topic_prefix>/summary`: retained JSON summary of the last completed incident lifecycle and recovery outcome
+- `<topic_prefix>/incident`: retained compatibility copy of the summary payload
 - `<topic_prefix>/event`: transient JSON event stream for actions, recovery, warnings, and startup
 - `<discovery_prefix>/.../config`: retained Home Assistant MQTT discovery payloads for the controller device and entities
 
@@ -208,17 +239,42 @@ Home Assistant discovery entities include:
 
 - UPS connected
 - On battery
+- Incident active
+- Failure active
 - UPS status
 - UPS runtime seconds
 - UPS runtime (formatted)
 - UPS charge
+- Controller version
 - Controller mode
+- Controller phase
+- Failure code
+- Failure message
+- Failure severity
+- Failure at
+- Incident status
+- Incident started at
 - Ceph noout set
 - Talos shutdown started
 - Linux shutdown started
 - Proxmox shutdown started
 - Recovery status
+- Recovery blocker
+- Recovery elapsed seconds
+- Recovery elapsed (formatted)
 - Last event
+- Last message
+- Last action
+- Last action target
+- Last action result
+- Last completed status
+- Last completed started at
+- Last completed ended at
+- Last completed power restored at
+- Last completed duration
+- Last completed trigger reason
+- Last completed last action
+- Last completed at
 
 If your broker allows anonymous publish, omit `mqtt_credentials` entirely.
 

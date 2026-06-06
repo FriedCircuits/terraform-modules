@@ -1,3 +1,15 @@
+resource "proxmox_virtual_environment_file" "bootstrap_script" {
+  content_type = "snippets"
+  datastore_id = var.snippet_datastore_id
+  node_name    = var.node_name
+  file_mode    = "0700"
+
+  source_raw {
+    data      = local.bootstrap_script
+    file_name = format("%s-bootstrap.sh", replace(var.name, ".", "-"))
+  }
+}
+
 module "lxc" {
   source = "../lxc"
 

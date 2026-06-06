@@ -6,37 +6,45 @@ cards:
 
   - type: markdown
     content: |-
-      {% if is_state('binary_sensor.shutdown_controller_on_battery', 'on') %}
+      {% if is_state('binary_sensor.shutdown_controller_incident_active', 'on') %}
       ## Power Event Active
       UPS runtime remaining: **{{ states('sensor.shutdown_controller_ups_runtime_formatted') }}**
 
       Battery charge: **{{ states('sensor.shutdown_controller_ups_charge') }}%**
 
-      Last event: **{{ states('sensor.shutdown_controller_last_event') or 'none' }}**
-      {% elif is_state('binary_sensor.shutdown_controller_ceph_noout_set', 'on')
-         or is_state('binary_sensor.shutdown_controller_talos_shutdown_started', 'on')
-        or is_state('binary_sensor.shutdown_controller_linux_shutdown_started', 'on')
-         or is_state('binary_sensor.shutdown_controller_proxmox_shutdown_started', 'on') %}
-      ## Shutdown Sequence In Progress
-      Controller mode: **{{ states('sensor.shutdown_controller_mode') }}**
+      Trigger: **{{ states('sensor.shutdown_controller_incident_trigger_reason') or 'none' }}**
 
-      Active stage: **{% if is_state('binary_sensor.shutdown_controller_proxmox_shutdown_started', 'on') %}Proxmox shutdown{% elif is_state('binary_sensor.shutdown_controller_linux_shutdown_started', 'on') %}Linux shutdown{% elif is_state('binary_sensor.shutdown_controller_talos_shutdown_started', 'on') %}Talos shutdown{% elif is_state('binary_sensor.shutdown_controller_ceph_noout_set', 'on') %}Ceph noout{% else %}Unknown{% endif %}**
+      Phase: **{{ states('sensor.shutdown_controller_phase') }}**
 
+      Last message: **{{ states('sensor.shutdown_controller_last_message') or 'none' }}**
+      {% elif is_state('binary_sensor.shutdown_controller_recovery_pending', 'on') %}
+      ## Recovery Pending
       Recovery status: **{{ states('sensor.shutdown_controller_recovery_status') }}**
 
-      Last event: **{{ states('sensor.shutdown_controller_last_event') or 'none' }}**
+      Recovery blocker: **{{ states('sensor.shutdown_controller_recovery_blocker') or 'none' }}**
+
+      Recovery elapsed: **{{ states('sensor.shutdown_controller_recovery_elapsed_formatted') }}**
+
+      Last message: **{{ states('sensor.shutdown_controller_last_message') or 'none' }}**
       {% elif is_state('binary_sensor.shutdown_controller_ups_connected', 'off') %}
       ## UPS Connectivity Lost
       The controller cannot currently reach the UPS.
 
-      Last event: **{{ states('sensor.shutdown_controller_last_event') or 'none' }}**
+      Last message: **{{ states('sensor.shutdown_controller_last_message') or 'none' }}**
+      {% elif is_state('binary_sensor.shutdown_controller_failure_active', 'on') %}
+      ## Failure Active
+      Failure: **{{ states('sensor.shutdown_controller_failure_code') or 'none' }}**
+
+      Severity: **{{ states('sensor.shutdown_controller_failure_severity') or 'none' }}**
+
+      Message: **{{ states('sensor.shutdown_controller_failure_message') or 'none' }}**
       {% else %}
       ## System Healthy
-      Controller mode: **{{ states('sensor.shutdown_controller_mode') }}**
+      Controller phase: **{{ states('sensor.shutdown_controller_phase') }}**
 
       UPS status: **{{ states('sensor.shutdown_controller_ups_status') }}**
 
-      Recovery status: **{{ states('sensor.shutdown_controller_recovery_status') }}**
+      Last incident: **{{ states('sensor.shutdown_controller_last_incident') }}**
       {% endif %}
 
   - type: heading
@@ -72,10 +80,50 @@ cards:
         hide_state: false
 
       - type: tile
-        entity: sensor.shutdown_controller_mode
-        name: Mode
-        icon: mdi:transmission-tower
+        entity: sensor.shutdown_controller_phase
+        name: Phase
+        icon: mdi:state-machine
         color: teal
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_controller_version
+        name: Version
+        icon: mdi:source-branch
+        color: purple
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_incident_status
+        name: Incident
+        icon: mdi:alert-decagram-outline
+        color: orange
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_recovery_blocker
+        name: Blocker
+        icon: mdi:progress-alert
+        color: amber
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_failure_code
+        name: Failure
+        icon: mdi:alert-circle-outline
+        color: red
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_failure_severity
+        name: Severity
+        icon: mdi:alert-decagram-outline
+        color: deep-orange
         vertical: false
         hide_state: false
 
@@ -123,7 +171,199 @@ cards:
         entity: sensor.shutdown_controller_last_event
         name: Last Event
         icon: mdi:message-alert-outline
-        color: purple
+        color: amber
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_action
+        name: Last Action
+        icon: mdi:play-circle-outline
+        color: blue
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_action_result
+        name: Action Result
+        icon: mdi:check-decagram-outline
+        color: green
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_action_target
+        name: Action Target
+        icon: mdi:crosshairs-gps
+        color: cyan
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_message
+        name: Last Message
+        icon: mdi:text-box-outline
+        color: brown
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_event_at
+        name: Last Event At
+        icon: mdi:clock-outline
+        color: amber
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_action_at
+        name: Last Action At
+        icon: mdi:clock-check-outline
+        color: blue
+        vertical: false
+        hide_state: false
+
+  - type: heading
+    heading: Current Incident
+    icon: mdi:alarm-light-outline
+
+  - type: grid
+    columns: 2
+    square: false
+    cards:
+      - type: tile
+        entity: sensor.shutdown_controller_incident_status
+        name: Status
+        icon: mdi:alert-circle-check-outline
+        color: orange
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_incident_started_at
+        name: Started
+        icon: mdi:clock-start
+        color: orange
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_incident_ended_at
+        name: Ended
+        icon: mdi:clock-end
+        color: green
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_incident_power_restored_at
+        name: Power Restored
+        icon: mdi:power-plug-battery-outline
+        color: green
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_incident_duration_formatted
+        name: Duration
+        icon: mdi:timer-sand-complete
+        color: deep-orange
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_incident_trigger_reason
+        name: Trigger
+        icon: mdi:flash-alert
+        color: amber
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_incident_trigger_runtime
+        name: Trigger Runtime
+        icon: mdi:timer-marker-outline
+        color: cyan
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_incident_trigger_charge
+        name: Trigger Charge
+        icon: mdi:battery-heart-variant
+        color: lime
+        vertical: false
+        hide_state: false
+
+  - type: heading
+    heading: Last Completed Incident
+    icon: mdi:timeline-alert-outline
+
+  - type: grid
+    columns: 2
+    square: false
+    cards:
+      - type: tile
+        entity: sensor.shutdown_controller_last_completed_status
+        name: Status
+        icon: mdi:history
+        color: teal
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_completed_started_at
+        name: Started
+        icon: mdi:clock-start
+        color: orange
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_completed_ended_at
+        name: Ended
+        icon: mdi:clock-end
+        color: green
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_completed_power_restored_at
+        name: Power Restored
+        icon: mdi:power-plug-battery-outline
+        color: green
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_completed_duration_formatted
+        name: Duration
+        icon: mdi:timer-sand-complete
+        color: deep-orange
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_completed_trigger_reason
+        name: Trigger
+        icon: mdi:flash-alert
+        color: amber
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_completed_last_action
+        name: Last Action
+        icon: mdi:play-circle-outline
+        color: blue
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_last_completed_at
+        name: Completed At
+        icon: mdi:clock-check-outline
+        color: cyan
         vertical: false
         hide_state: false
 
@@ -169,6 +409,8 @@ cards:
     refresh_interval: 60
     entities:
       - entity: binary_sensor.shutdown_controller_on_battery
+      - entity: binary_sensor.shutdown_controller_incident_active
+      - entity: binary_sensor.shutdown_controller_recovery_pending
       - entity: binary_sensor.shutdown_controller_ceph_noout_set
       - entity: binary_sensor.shutdown_controller_talos_shutdown_started
       - entity: binary_sensor.shutdown_controller_linux_shutdown_started

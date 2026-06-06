@@ -1,5 +1,6 @@
 locals {
-  container_name = var.name
+  container_name     = var.name
+  controller_version = coalesce(var.controller_version, trimspace(file("${path.module}/../../../VERSION")))
   description = coalesce(
     var.description,
     format("Shutdown controller %s", var.name)
@@ -10,6 +11,7 @@ locals {
 
   controller_env = templatefile("${path.module}/templates/controller.env.tftpl", {
     controller_name                             = var.name
+    controller_version                          = local.controller_version
     kubeconfig_path                             = "/etc/shutdown-controller/kubeconfig"
     talosconfig_path                            = "/etc/shutdown-controller/talosconfig"
     ceph_namespace                              = coalesce(try(var.ceph.namespace, null), "rook-ceph")
@@ -71,10 +73,18 @@ locals {
     #!/bin/sh
     set -eu
 
+    hook_log="/var/log/shutdown-controller-hook.log"
+    log() {
+      printf '%s shutdown-controller-hook: %s\n' "$(date -Iseconds)" "$*" >>"$hook_log"
+    }
+
     vmid="$1"
     phase="$2"
 
+    log "invoked vmid=$vmid phase=$phase"
+
     if [ "$phase" != "post-start" ]; then
+      log "skipping non-post-start phase"
       exit 0
     fi
 
@@ -82,15 +92,50 @@ locals {
     until pct exec "$vmid" -- sh -lc 'true' >/dev/null 2>&1; do
       attempts=$((attempts + 1))
       if [ "$attempts" -ge 30 ]; then
+        log "container $vmid did not become ready for pct exec"
         echo "container $vmid did not become ready for pct exec" >&2
         exit 1
       fi
       sleep 2
     done
 
-    pct exec "$vmid" -- sh -lc 'install -d -m 0755 /usr/local/sbin'
-    pct exec "$vmid" -- sh -lc 'printf %s '"'"'${base64encode(local.bootstrap_script)}'"'"' | base64 -d >/usr/local/sbin/shutdown-controller-bootstrap.sh
-chmod 0755 /usr/local/sbin/shutdown-controller-bootstrap.sh
-sh /usr/local/sbin/shutdown-controller-bootstrap.sh'
+    log "container ready for pct exec"
+
+    bootstrap_file="$(pvesm path '${proxmox_virtual_environment_file.bootstrap_script.id}')"
+    if [ -z "$bootstrap_file" ] || [ ! -f "$bootstrap_file" ]; then
+      log "bootstrap snippet not found at resolved path: $bootstrap_file"
+      echo "shutdown-controller bootstrap snippet not found" >&2
+      exit 1
+    fi
+
+    log "resolved bootstrap snippet path: $bootstrap_file"
+
+    log "scheduling async bootstrap apply"
+    nohup sh -s "$vmid" "$bootstrap_file" <<'HOOK_APPLY' >/dev/null 2>&1 &
+vmid="$1"
+bootstrap_file="$2"
+hook_log="/var/log/shutdown-controller-hook.log"
+
+log() {
+  printf '%s shutdown-controller-hook: %s\n' "$(date -Iseconds)" "$*" >>"$hook_log"
+}
+
+sleep 5
+
+log "async apply starting vmid=$vmid bootstrap_file=$bootstrap_file"
+
+pct exec "$vmid" -- sh -lc 'install -d -m 0755 /usr/local/sbin'
+
+log "async apply pushing bootstrap into container"
+pct push "$vmid" "$bootstrap_file" /usr/local/sbin/shutdown-controller-bootstrap.sh
+
+log "async apply executing bootstrap inside container"
+pct exec "$vmid" -- sh -lc 'chmod 0755 /usr/local/sbin/shutdown-controller-bootstrap.sh
+BOOTSTRAP_LOG_FILE=/var/log/shutdown-controller-bootstrap.log /usr/local/sbin/shutdown-controller-bootstrap.sh'
+
+log "async apply completed successfully"
+HOOK_APPLY
+
+    log "async bootstrap apply scheduled"
   EOT
 }

@@ -26,7 +26,8 @@ MQTT_RETAIN_STATUS="${MQTT_RETAIN_STATUS:-true}"
 MQTT_DISCOVERY_PREFIX="${MQTT_DISCOVERY_PREFIX:-homeassistant}"
 MQTT_ENABLE_HA_DISCOVERY="${MQTT_ENABLE_HA_DISCOVERY:-true}"
 MQTT_DISCOVERY_REPUBLISH_INTERVAL_SECONDS="${MQTT_DISCOVERY_REPUBLISH_INTERVAL_SECONDS:-300}"
-MQTT_DISCOVERY_SCHEMA_VERSION="${MQTT_DISCOVERY_SCHEMA_VERSION:-5}"
+MQTT_DISCOVERY_SCHEMA_VERSION="${MQTT_DISCOVERY_SCHEMA_VERSION:-7}"
+CONTROLLER_VERSION="${CONTROLLER_VERSION:-unknown}"
 LOG_TO_CONSOLE="${LOG_TO_CONSOLE:-true}"
 CONSOLE_DEVICE="${CONSOLE_DEVICE:-/dev/console}"
 LOG_TO_FILE="${LOG_TO_FILE:-true}"
@@ -41,8 +42,16 @@ LINUX_SHUTDOWN_SSH_KNOWN_HOSTS_PATH="${LINUX_SHUTDOWN_SSH_KNOWN_HOSTS_PATH:-/etc
 
 mkdir -p "$STATE_DIR"
 
+current_timestamp() {
+	date -Iseconds
+}
+
+current_epoch() {
+	date +%s
+}
+
 log() {
-	timestamp="$(date -Iseconds)"
+	timestamp="$(current_timestamp)"
 	message="$timestamp shutdown-controller: $*"
 	echo "$message"
 
@@ -57,36 +66,234 @@ log() {
 	fi
 }
 
-run_once() {
+write_state_value() {
 	name="$1"
-	shift
+	value="$2"
+	printf '%s\n' "$value" >"$STATE_DIR/$name"
+}
 
-	marker="$STATE_DIR/$name.done"
-	if [ -f "$marker" ]; then
+read_state_value() {
+	name="$1"
+	default_value="$2"
+	if [ -f "$STATE_DIR/$name" ]; then
+		cat "$STATE_DIR/$name" 2>/dev/null || printf '%s\n' "$default_value"
+	else
+		printf '%s\n' "$default_value"
+	fi
+}
+
+delete_state_value() {
+	rm -f "$STATE_DIR/$1"
+}
+
+marker_bool() {
+	name="$1"
+	if [ -f "$STATE_DIR/$name.done" ]; then
+		printf '%s\n' "true"
+	else
+		printf '%s\n' "false"
+	fi
+}
+
+controller_device_id() {
+	printf '%s\n' "$CONTROLLER_NAME" | tr '.-' '__'
+}
+
+set_controller_phase() {
+	write_state_value "controller.phase" "$1"
+}
+
+clear_shutdown_markers() {
+	rm -f \
+		"$STATE_DIR/talos_shutdown.done" \
+		"$STATE_DIR/linux_shutdown.done" \
+		"$STATE_DIR/proxmox_shutdown.done" \
+		"$STATE_DIR/battery.stage"
+}
+
+clear_all_action_markers() {
+	rm -f \
+		"$STATE_DIR/ceph_noout.done" \
+		"$STATE_DIR/talos_shutdown.done" \
+		"$STATE_DIR/linux_shutdown.done" \
+		"$STATE_DIR/proxmox_shutdown.done" \
+		"$STATE_DIR/battery.stage"
+}
+
+reset_incident_state_for_new_event() {
+	clear_all_action_markers
+	write_state_value "recovery.status" "idle"
+	write_state_value "recovery.blocker" ""
+	write_state_value "recovery.elapsed_seconds" "0"
+	write_state_value "incident.power_restored_at" ""
+	write_state_value "incident.ended_at" ""
+	write_state_value "incident.duration_seconds" "0"
+	write_state_value "incident.trigger_reason" ""
+	write_state_value "incident.trigger_status" ""
+	write_state_value "incident.trigger_runtime" ""
+	write_state_value "incident.trigger_charge" ""
+	write_state_value "last_action" ""
+	write_state_value "last_action_target" ""
+	write_state_value "last_action_result" ""
+	write_state_value "last_action_at" ""
+}
+
+format_seconds_hms() {
+	seconds="$1"
+	case "$seconds" in
+		''|*[!0-9-]*)
+			printf '%s\n' "unknown"
+			return 0
+			;;
+		-*)
+			printf '%s\n' "unknown"
+			return 0
+			;;
+	esac
+
+	hours=$((seconds / 3600))
+	minutes=$(((seconds % 3600) / 60))
+	remaining_seconds=$((seconds % 60))
+	printf '%02d:%02d:%02d\n' "$hours" "$minutes" "$remaining_seconds"
+}
+
+duration_between_epochs() {
+	start_epoch="$1"
+	end_epoch="$2"
+	case "$start_epoch" in
+		''|*[!0-9]*) printf '%s\n' "0"; return 0 ;;
+	esac
+	case "$end_epoch" in
+		''|*[!0-9]*) printf '%s\n' "0"; return 0 ;;
+	esac
+	if [ "$end_epoch" -lt "$start_epoch" ]; then
+		printf '%s\n' "0"
+		return 0
+	fi
+	printf '%s\n' $((end_epoch - start_epoch))
+}
+
+split_csv() {
+	value="$1"
+	old_ifs="$IFS"
+	IFS=','
+	set -- $value
+	IFS="$old_ifs"
+	for item in "$@"; do
+		if [ -n "$item" ]; then
+			printf '%s\n' "$item"
+		fi
+	done
+}
+
+normal_status_snapshot() {
+	status="$1"
+	incident_status="$(read_state_value "incident.status" "idle")"
+	printf 'status=%s incident_status=%s\n' "$status" "$incident_status"
+}
+
+battery_action_stage() {
+	runtime="$1"
+
+	if [ "$runtime" -lt 0 ]; then
+		printf '%s\n' "unknown"
 		return 0
 	fi
 
-	if "$@"; then
-		: >"$marker"
+	if [ "$runtime" -le "$PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
+		printf '%s\n' "proxmox_shutdown"
+		return 0
+	fi
+
+	if [ "$runtime" -le "$LINUX_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
+		printf '%s\n' "linux_shutdown"
+		return 0
+	fi
+
+	if [ "$runtime" -le "$TALOS_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
+		printf '%s\n' "talos_shutdown"
+		return 0
+	fi
+
+	if [ "$runtime" -le "$NOOUT_MIN_RUNTIME_SECONDS" ]; then
+		printf '%s\n' "ceph_noout"
+		return 0
+	fi
+
+	printf '%s\n' "monitoring"
+}
+
+controller_phase_for_status() {
+	status="$1"
+	runtime="$2"
+	incident_status="$(read_state_value "incident.status" "idle")"
+
+	if is_on_battery "$status"; then
+		stage="$(battery_action_stage "$runtime")"
+		if [ "$stage" = "monitoring" ] || [ "$stage" = "unknown" ]; then
+			printf '%s\n' "on_battery"
+			return 0
+		fi
+		printf '%s\n' "$stage"
+		return 0
+	fi
+
+	case "$incident_status" in
+		recovery_pending) printf '%s\n' "power_restored_recovery_pending" ;;
+		timeout) printf '%s\n' "recovery_timeout" ;;
+		recovered) printf '%s\n' "monitoring" ;;
+		*) printf '%s\n' "monitoring" ;;
+	esac
+}
+
+battery_status_snapshot() {
+	status="$1"
+	runtime="$2"
+	charge="$3"
+	stage="$(battery_action_stage "$runtime")"
+	printf 'status=%s stage=%s charge=%s\n' "$status" "$stage" "$charge"
+}
+
+should_log_status() {
+	snapshot="$1"
+	prefix="$2"
+	state_prefix="$STATE_DIR/$prefix"
+	last_snapshot_file="${state_prefix}.snapshot"
+	last_log_time_file="${state_prefix}.time"
+
+	if [ ! -f "$last_snapshot_file" ] || [ ! -f "$last_log_time_file" ]; then
+		return 0
+	fi
+
+	last_snapshot="$(cat "$last_snapshot_file" 2>/dev/null || true)"
+	if [ "$snapshot" != "$last_snapshot" ]; then
+		return 0
+	fi
+
+	case "$STATUS_LOG_INTERVAL_SECONDS" in
+		''|*[!0-9]*) return 1 ;;
+		0) return 1 ;;
+	esac
+
+	now="$(current_epoch)"
+	last_log_time="$(cat "$last_log_time_file" 2>/dev/null || printf '0')"
+	case "$last_log_time" in
+		''|*[!0-9]*) return 0 ;;
+	esac
+
+	if [ $((now - last_log_time)) -ge "$STATUS_LOG_INTERVAL_SECONDS" ]; then
 		return 0
 	fi
 
 	return 1
 }
 
-run_action() {
-	label="$1"
-	shift
-
-	if [ "$DRY_RUN" = "true" ]; then
-		log "dry-run: $label"
-		mqtt_publish_event "action" "$label" "dry-run"
-		return 0
-	fi
-
-	log "running: $label"
-	mqtt_publish_event "action" "$label" "running"
-	"$@"
+record_status_log() {
+	snapshot="$1"
+	prefix="$2"
+	state_prefix="$STATE_DIR/$prefix"
+	printf '%s\n' "$snapshot" >"${state_prefix}.snapshot"
+	current_epoch >"${state_prefix}.time"
 }
 
 require_command() {
@@ -194,33 +401,97 @@ mqtt_publish_absolute() {
 	mqtt_run_publish "$topic" "$@"
 }
 
-write_state_value() {
-	name="$1"
-	value="$2"
-	printf '%s\n' "$value" >"$STATE_DIR/$name"
+persist_ups_snapshot() {
+	status="$1"
+	runtime="$2"
+	charge="$3"
+	ups_connected="$4"
+	write_state_value "ups.status" "$status"
+	write_state_value "ups.runtime" "$runtime"
+	write_state_value "ups.charge" "$charge"
+	write_state_value "ups.connected" "$ups_connected"
+	write_state_value "ups.last_update_at" "$(current_timestamp)"
 }
 
-read_state_value() {
-	name="$1"
-	default_value="$2"
-	if [ -f "$STATE_DIR/$name" ]; then
-		cat "$STATE_DIR/$name" 2>/dev/null || printf '%s\n' "$default_value"
-	else
-		printf '%s\n' "$default_value"
-	fi
+incident_status_value() {
+	read_state_value "incident.status" "idle"
 }
 
-marker_bool() {
-	name="$1"
-	if [ -f "$STATE_DIR/$name.done" ]; then
-		printf '%s\n' "true"
-	else
-		printf '%s\n' "false"
-	fi
+set_last_action() {
+	action_name="$1"
+	target_name="$2"
+	result="$3"
+	write_state_value "last_action" "$action_name"
+	write_state_value "last_action_target" "$target_name"
+	write_state_value "last_action_result" "$result"
+	write_state_value "last_action_at" "$(current_timestamp)"
 }
 
-controller_device_id() {
-	printf '%s\n' "$CONTROLLER_NAME" | tr '.-' '__'
+set_recovery_status() {
+	recovery_status="$1"
+	recovery_blocker="$2"
+	recovery_elapsed_seconds="$3"
+	write_state_value "recovery.status" "$recovery_status"
+	write_state_value "recovery.blocker" "$recovery_blocker"
+	write_state_value "recovery.elapsed_seconds" "$recovery_elapsed_seconds"
+}
+
+clear_incident_state() {
+	write_state_value "incident.id" ""
+	write_state_value "incident.status" "idle"
+	write_state_value "incident.started_at" ""
+	write_state_value "incident.ended_at" ""
+	write_state_value "incident.power_restored_at" ""
+	write_state_value "incident.duration_seconds" "0"
+	write_state_value "incident.trigger_reason" ""
+	write_state_value "incident.trigger_status" ""
+	write_state_value "incident.trigger_runtime" ""
+	write_state_value "incident.trigger_charge" ""
+	clear_all_action_markers
+	set_recovery_status "idle" "" "0"
+}
+
+store_last_completed_summary() {
+	summary_completed_at="$(current_timestamp)"
+	write_state_value "summary.id" "$(read_state_value "incident.id" "")"
+	write_state_value "summary.status" "$(read_state_value "incident.status" "")"
+	write_state_value "summary.started_at" "$(read_state_value "incident.started_at" "")"
+	write_state_value "summary.ended_at" "$(read_state_value "incident.ended_at" "")"
+	write_state_value "summary.power_restored_at" "$(read_state_value "incident.power_restored_at" "")"
+	write_state_value "summary.duration_seconds" "$(read_state_value "incident.duration_seconds" "0")"
+	write_state_value "summary.trigger_reason" "$(read_state_value "incident.trigger_reason" "")"
+	write_state_value "summary.trigger_status" "$(read_state_value "incident.trigger_status" "")"
+	write_state_value "summary.trigger_runtime" "$(read_state_value "incident.trigger_runtime" "")"
+	write_state_value "summary.trigger_charge" "$(read_state_value "incident.trigger_charge" "")"
+	write_state_value "summary.last_action" "$(read_state_value "last_action" "")"
+	write_state_value "summary.last_action_target" "$(read_state_value "last_action_target" "")"
+	write_state_value "summary.last_action_result" "$(read_state_value "last_action_result" "")"
+	write_state_value "summary.last_action_at" "$(read_state_value "last_action_at" "")"
+	write_state_value "summary.last_event" "$(read_state_value "last_event" "")"
+	write_state_value "summary.last_event_at" "$(read_state_value "last_event_at" "")"
+	write_state_value "summary.last_message" "$(read_state_value "last_message" "")"
+	write_state_value "summary.recovery_status" "$(read_state_value "recovery.status" "")"
+	write_state_value "summary.recovery_blocker" "$(read_state_value "recovery.blocker" "")"
+	write_state_value "summary.completed_at" "$summary_completed_at"
+}
+
+normalize_startup_state() {
+	incident_status="$(incident_status_value)"
+	recovery_status="$(read_state_value "recovery.status" "idle")"
+
+	case "$incident_status" in
+		recovered)
+			if [ "$recovery_status" = "idle" ]; then
+				store_last_completed_summary
+				clear_incident_state
+				set_controller_phase "monitoring"
+				log "migrated recovered incident state into last completed summary on startup"
+			fi
+			;;
+		idle)
+			set_recovery_status "idle" "" "0"
+			;;
+	esac
 }
 
 ha_discovery_enabled() {
@@ -248,7 +519,7 @@ should_publish_discovery() {
 		return 1
 	fi
 
-	now="$(date +%s)"
+	now="$(current_epoch)"
 	last_publish="$(cat "$STATE_DIR/ha_discovery.last_publish" 2>/dev/null || printf '0')"
 	case "$last_publish" in
 		''|*[!0-9]*) return 0 ;;
@@ -262,13 +533,29 @@ should_publish_discovery() {
 }
 
 record_discovery_publish() {
-	date +%s >"$STATE_DIR/ha_discovery.last_publish"
+	current_epoch >"$STATE_DIR/ha_discovery.last_publish"
 }
 
 mqtt_publish_event() {
 	event_name="$1"
 	message="$2"
-	status="$3"
+	event_status="$3"
+	context_status="${4:-$(read_state_value "ups.status" "unknown")}"
+	runtime="${5:-$(read_state_value "ups.runtime" "-1")}"
+	charge="${6:-$(read_state_value "ups.charge" "")}"
+	phase="${7:-$(read_state_value "controller.phase" "monitoring")}"
+	reason="${8:-}"
+	target_type="${9:-}"
+	target_name="${10:-}"
+	action_result="${11:-}"
+	error_detail="${12:-}"
+	timestamp="$(current_timestamp)"
+	incident_id="$(read_state_value "incident.id" "")"
+	incident_status="$(read_state_value "incident.status" "idle")"
+
+	write_state_value "last_event" "$event_name"
+	write_state_value "last_message" "$message"
+	write_state_value "last_event_at" "$timestamp"
 
 	if ! command -v "$JQ_BIN" >/dev/null 2>&1; then
 		return 0
@@ -276,12 +563,23 @@ mqtt_publish_event() {
 
 	payload="$($JQ_BIN -nc \
 		--arg controller "$CONTROLLER_NAME" \
+		--arg controller_version "$CONTROLLER_VERSION" \
+		--arg timestamp "$timestamp" \
 		--arg event "$event_name" \
 		--arg message "$message" \
-		--arg status "$status" \
-		'{controller:$controller,event:$event,message:$message,status:$status}')"
-	write_state_value "last_event" "$event_name"
-	write_state_value "last_message" "$message"
+		--arg status "$event_status" \
+		--arg ups_status "$context_status" \
+		--arg runtime "$runtime" \
+		--arg charge "$charge" \
+		--arg phase "$phase" \
+		--arg incident_id "$incident_id" \
+		--arg incident_status "$incident_status" \
+		--arg reason "$reason" \
+		--arg target_type "$target_type" \
+		--arg target_name "$target_name" \
+		--arg action_result "$action_result" \
+		--arg error_detail "$error_detail" \
+		'{controller:$controller,controller_version:$controller_version,timestamp:$timestamp,event:$event,message:$message,status:$status,ups_status:$ups_status,runtime:$runtime,charge:$charge,phase:$phase,incident_id:$incident_id,incident_status:$incident_status,reason:$reason,target_type:$target_type,target_name:$target_name,action_result:$action_result,error:$error_detail}')"
 	mqtt_publish "event" "$payload" "false"
 }
 
@@ -301,22 +599,110 @@ mqtt_publish_state() {
 		on_battery="true"
 	fi
 
+	phase="$(read_state_value "controller.phase" "monitoring")"
 	recovery_status="$(read_state_value "recovery.status" "idle")"
+	recovery_blocker="$(read_state_value "recovery.blocker" "")"
+	recovery_elapsed_seconds="$(read_state_value "recovery.elapsed_seconds" "0")"
+	recovery_elapsed_formatted="$(format_seconds_hms "$recovery_elapsed_seconds")"
+	incident_id="$(read_state_value "incident.id" "")"
+	incident_status="$(read_state_value "incident.status" "idle")"
+	incident_started_at="$(read_state_value "incident.started_at" "")"
+	incident_ended_at="$(read_state_value "incident.ended_at" "")"
+	incident_power_restored_at="$(read_state_value "incident.power_restored_at" "")"
+	incident_duration_seconds="$(read_state_value "incident.duration_seconds" "0")"
+	incident_trigger_reason="$(read_state_value "incident.trigger_reason" "")"
+	incident_trigger_status="$(read_state_value "incident.trigger_status" "")"
+	incident_trigger_runtime="$(read_state_value "incident.trigger_runtime" "")"
+	incident_trigger_charge="$(read_state_value "incident.trigger_charge" "")"
+	last_action="$(read_state_value "last_action" "")"
+	last_action_target="$(read_state_value "last_action_target" "")"
+	last_action_result="$(read_state_value "last_action_result" "")"
+	last_action_at="$(read_state_value "last_action_at" "")"
 	last_event="$(read_state_value "last_event" "")"
+	last_event_at="$(read_state_value "last_event_at" "")"
 	last_message="$(read_state_value "last_message" "")"
+	last_completed_id="$(read_state_value "summary.id" "")"
+	last_completed_status="$(read_state_value "summary.status" "")"
+	last_completed_started_at="$(read_state_value "summary.started_at" "")"
+	last_completed_ended_at="$(read_state_value "summary.ended_at" "")"
+	last_completed_power_restored_at="$(read_state_value "summary.power_restored_at" "")"
+	last_completed_duration_seconds="$(read_state_value "summary.duration_seconds" "0")"
+	last_completed_trigger_reason="$(read_state_value "summary.trigger_reason" "")"
+	last_completed_trigger_status="$(read_state_value "summary.trigger_status" "")"
+	last_completed_trigger_runtime="$(read_state_value "summary.trigger_runtime" "")"
+	last_completed_trigger_charge="$(read_state_value "summary.trigger_charge" "")"
+	last_completed_last_action="$(read_state_value "summary.last_action" "")"
+	last_completed_last_action_target="$(read_state_value "summary.last_action_target" "")"
+	last_completed_last_action_result="$(read_state_value "summary.last_action_result" "")"
+	last_completed_last_action_at="$(read_state_value "summary.last_action_at" "")"
+	last_completed_last_event="$(read_state_value "summary.last_event" "")"
+	last_completed_last_event_at="$(read_state_value "summary.last_event_at" "")"
+	last_completed_last_message="$(read_state_value "summary.last_message" "")"
+	last_completed_recovery_status="$(read_state_value "summary.recovery_status" "")"
+	last_completed_recovery_blocker="$(read_state_value "summary.recovery_blocker" "")"
+	last_completed_at="$(read_state_value "summary.completed_at" "")"
 	ceph_noout_set="$(marker_bool "ceph_noout")"
 	talos_shutdown_started="$(marker_bool "talos_shutdown")"
 	linux_shutdown_started="$(marker_bool "linux_shutdown")"
 	proxmox_shutdown_started="$(marker_bool "proxmox_shutdown")"
 	runtime_formatted="$(format_seconds_hms "$runtime")"
+	incident_duration_formatted="$(format_seconds_hms "$incident_duration_seconds")"
+	last_completed_duration_formatted="$(format_seconds_hms "$last_completed_duration_seconds")"
+	incident_active="false"
+	recovery_pending="false"
+	failure_active="false"
+	failure_code=""
+	failure_message=""
+	failure_severity=""
+	failure_at=""
+
+	case "$incident_status" in
+		active|recovery_pending|timeout)
+			incident_active="true"
+			;;
+	esac
+
+	case "$recovery_status" in
+		waiting|pending_boot|timeout)
+			recovery_pending="true"
+			;;
+	esac
+
+	if [ "$ups_connected" != "true" ]; then
+		failure_active="true"
+		failure_code="ups_unavailable"
+		failure_message="unable to read UPS status"
+		failure_severity="warning"
+		failure_at="$last_event_at"
+	elif [ "$incident_status" = "timeout" ] || [ "$recovery_status" = "timeout" ] || [ "$recovery_blocker" = "manual_review_required" ]; then
+		failure_active="true"
+		failure_code="recovery_timeout"
+		failure_message="recovery timed out; manual review required"
+		failure_severity="error"
+		failure_at="$last_event_at"
+	elif [ "$last_action_result" = "failed" ]; then
+		failure_active="true"
+		failure_code="action_failed"
+		failure_message="action ${last_action:-unknown} failed for ${last_action_target:-unknown}"
+		failure_severity="error"
+		failure_at="$last_action_at"
+	elif [ "$recovery_blocker" = "unset_noout_failed" ]; then
+		failure_active="true"
+		failure_code="recovery_blocked"
+		failure_message="failed to unset ceph noout; retrying"
+		failure_severity="warning"
+		failure_at="$last_action_at"
+	fi
 
 	payload="$($JQ_BIN -nc \
 		--arg controller "$CONTROLLER_NAME" \
+		--arg controller_version "$CONTROLLER_VERSION" \
 		--arg status "$status" \
 		--arg runtime "$runtime" \
 		--arg runtime_formatted "$runtime_formatted" \
 		--arg charge "$charge" \
 		--arg mode "$mode" \
+		--arg phase "$phase" \
 		--arg ups_connected "$ups_connected" \
 		--arg on_battery "$on_battery" \
 		--arg ceph_noout_set "$ceph_noout_set" \
@@ -324,11 +710,66 @@ mqtt_publish_state() {
 		--arg linux_shutdown_started "$linux_shutdown_started" \
 		--arg proxmox_shutdown_started "$proxmox_shutdown_started" \
 		--arg recovery_status "$recovery_status" \
+		--arg recovery_blocker "$recovery_blocker" \
+		--arg recovery_elapsed_seconds "$recovery_elapsed_seconds" \
+		--arg recovery_elapsed_formatted "$recovery_elapsed_formatted" \
+		--arg incident_id "$incident_id" \
+		--arg incident_status "$incident_status" \
+		--arg incident_active "$incident_active" \
+		--arg recovery_pending "$recovery_pending" \
+		--arg incident_started_at "$incident_started_at" \
+		--arg incident_ended_at "$incident_ended_at" \
+		--arg incident_power_restored_at "$incident_power_restored_at" \
+		--arg incident_duration_seconds "$incident_duration_seconds" \
+		--arg incident_duration_formatted "$incident_duration_formatted" \
+		--arg incident_trigger_reason "$incident_trigger_reason" \
+		--arg incident_trigger_status "$incident_trigger_status" \
+		--arg incident_trigger_runtime "$incident_trigger_runtime" \
+		--arg incident_trigger_charge "$incident_trigger_charge" \
+		--arg last_action "$last_action" \
+		--arg last_action_target "$last_action_target" \
+		--arg last_action_result "$last_action_result" \
+		--arg last_action_at "$last_action_at" \
 		--arg last_event "$last_event" \
+		--arg last_event_at "$last_event_at" \
 		--arg last_message "$last_message" \
-		'{controller:$controller,status:$status,runtime:$runtime,runtime_formatted:$runtime_formatted,charge:$charge,mode:$mode,ups_connected:($ups_connected == "true"),on_battery:($on_battery == "true"),ceph_noout_set:($ceph_noout_set == "true"),talos_shutdown_started:($talos_shutdown_started == "true"),linux_shutdown_started:($linux_shutdown_started == "true"),proxmox_shutdown_started:($proxmox_shutdown_started == "true"),recovery_status:$recovery_status,last_event:$last_event,last_message:$last_message}')"
+		--arg failure_active "$failure_active" \
+		--arg failure_code "$failure_code" \
+		--arg failure_message "$failure_message" \
+		--arg failure_severity "$failure_severity" \
+		--arg failure_at "$failure_at" \
+		'{controller:$controller,controller_version:$controller_version,status:$status,runtime:$runtime,runtime_formatted:$runtime_formatted,charge:$charge,mode:$mode,phase:$phase,ups_connected:($ups_connected == "true"),on_battery:($on_battery == "true"),ceph_noout_set:($ceph_noout_set == "true"),talos_shutdown_started:($talos_shutdown_started == "true"),linux_shutdown_started:($linux_shutdown_started == "true"),proxmox_shutdown_started:($proxmox_shutdown_started == "true"),recovery_status:$recovery_status,recovery_blocker:$recovery_blocker,recovery_elapsed_seconds:$recovery_elapsed_seconds,recovery_elapsed_formatted:$recovery_elapsed_formatted,incident_id:$incident_id,incident_status:$incident_status,incident_active:($incident_active == "true"),recovery_pending:($recovery_pending == "true"),incident_started_at:$incident_started_at,incident_ended_at:$incident_ended_at,incident_power_restored_at:$incident_power_restored_at,incident_duration_seconds:$incident_duration_seconds,incident_duration_formatted:$incident_duration_formatted,incident_trigger_reason:$incident_trigger_reason,incident_trigger_status:$incident_trigger_status,incident_trigger_runtime:$incident_trigger_runtime,incident_trigger_charge:$incident_trigger_charge,last_action:$last_action,last_action_target:$last_action_target,last_action_result:$last_action_result,last_action_at:$last_action_at,last_event:$last_event,last_event_at:$last_event_at,last_message:$last_message,failure_active:($failure_active == "true"),failure_code:$failure_code,failure_message:$failure_message,failure_severity:$failure_severity,failure_at:$failure_at}')"
+
+	summary_payload="$($JQ_BIN -nc \
+		--arg controller "$CONTROLLER_NAME" \
+		--arg controller_version "$CONTROLLER_VERSION" \
+		--arg last_completed_id "$last_completed_id" \
+		--arg last_completed_status "$last_completed_status" \
+		--arg last_completed_started_at "$last_completed_started_at" \
+		--arg last_completed_ended_at "$last_completed_ended_at" \
+		--arg last_completed_power_restored_at "$last_completed_power_restored_at" \
+		--arg last_completed_duration_seconds "$last_completed_duration_seconds" \
+		--arg last_completed_duration_formatted "$last_completed_duration_formatted" \
+		--arg last_completed_trigger_reason "$last_completed_trigger_reason" \
+		--arg last_completed_trigger_status "$last_completed_trigger_status" \
+		--arg last_completed_trigger_runtime "$last_completed_trigger_runtime" \
+		--arg last_completed_trigger_charge "$last_completed_trigger_charge" \
+		--arg last_completed_last_action "$last_completed_last_action" \
+		--arg last_completed_last_action_target "$last_completed_last_action_target" \
+		--arg last_completed_last_action_result "$last_completed_last_action_result" \
+		--arg last_completed_last_action_at "$last_completed_last_action_at" \
+		--arg last_completed_last_event "$last_completed_last_event" \
+		--arg last_completed_last_event_at "$last_completed_last_event_at" \
+		--arg last_completed_last_message "$last_completed_last_message" \
+		--arg last_completed_recovery_status "$last_completed_recovery_status" \
+		--arg last_completed_recovery_blocker "$last_completed_recovery_blocker" \
+		--arg last_completed_at "$last_completed_at" \
+		'{controller:$controller,controller_version:$controller_version,last_completed_id:$last_completed_id,last_completed_status:$last_completed_status,last_completed_started_at:$last_completed_started_at,last_completed_ended_at:$last_completed_ended_at,last_completed_power_restored_at:$last_completed_power_restored_at,last_completed_duration_seconds:$last_completed_duration_seconds,last_completed_duration_formatted:$last_completed_duration_formatted,last_completed_trigger_reason:$last_completed_trigger_reason,last_completed_trigger_status:$last_completed_trigger_status,last_completed_trigger_runtime:$last_completed_trigger_runtime,last_completed_trigger_charge:$last_completed_trigger_charge,last_completed_last_action:$last_completed_last_action,last_completed_last_action_target:$last_completed_last_action_target,last_completed_last_action_result:$last_completed_last_action_result,last_completed_last_action_at:$last_completed_last_action_at,last_completed_last_event:$last_completed_last_event,last_completed_last_event_at:$last_completed_last_event_at,last_completed_last_message:$last_completed_last_message,last_completed_recovery_status:$last_completed_recovery_status,last_completed_recovery_blocker:$last_completed_recovery_blocker,last_completed_at:$last_completed_at}')"
+
 	mqtt_publish "state" "$payload" "$MQTT_RETAIN_STATUS"
 	mqtt_publish "status" "$payload" "$MQTT_RETAIN_STATUS"
+	mqtt_publish "summary" "$summary_payload" "true"
+	mqtt_publish "incident" "$summary_payload" "true"
 }
 
 publish_homeassistant_discovery() {
@@ -342,6 +783,7 @@ publish_homeassistant_discovery() {
 
 	device_id="$(controller_device_id)"
 	state_topic="$MQTT_TOPIC_PREFIX/state"
+	summary_topic="$MQTT_TOPIC_PREFIX/summary"
 	log "publishing Home Assistant discovery to $MQTT_DISCOVERY_PREFIX for $MQTT_TOPIC_PREFIX"
 	device_json="$($JQ_BIN -nc \
 		--arg identifier "$CONTROLLER_NAME" \
@@ -370,11 +812,46 @@ publish_homeassistant_discovery() {
 		clear_discovery_config "sensor" "ups_runtime"
 		clear_discovery_config "sensor" "ups_runtime_formatted"
 		clear_discovery_config "sensor" "ups_charge"
+		clear_discovery_config "sensor" "controller_version"
 		clear_discovery_config "sensor" "controller_mode"
+		clear_discovery_config "sensor" "controller_phase"
+		clear_discovery_config "sensor" "failure_code"
+		clear_discovery_config "sensor" "failure_message"
+		clear_discovery_config "sensor" "failure_severity"
+		clear_discovery_config "sensor" "failure_at"
 		clear_discovery_config "sensor" "recovery_status"
+		clear_discovery_config "sensor" "recovery_blocker"
+		clear_discovery_config "sensor" "recovery_elapsed_seconds"
+		clear_discovery_config "sensor" "recovery_elapsed_formatted"
+		clear_discovery_config "sensor" "incident_status"
+		clear_discovery_config "sensor" "incident_started_at"
+		clear_discovery_config "sensor" "incident_ended_at"
+		clear_discovery_config "sensor" "incident_power_restored_at"
+		clear_discovery_config "sensor" "incident_duration_seconds"
+		clear_discovery_config "sensor" "incident_duration_formatted"
+		clear_discovery_config "sensor" "incident_trigger_reason"
+		clear_discovery_config "sensor" "incident_trigger_runtime"
+		clear_discovery_config "sensor" "incident_trigger_charge"
+		clear_discovery_config "sensor" "last_action"
+		clear_discovery_config "sensor" "last_action_target"
+		clear_discovery_config "sensor" "last_action_result"
+		clear_discovery_config "sensor" "last_action_at"
 		clear_discovery_config "sensor" "last_event"
+		clear_discovery_config "sensor" "last_event_at"
+		clear_discovery_config "sensor" "last_message"
+		clear_discovery_config "sensor" "last_completed_status"
+		clear_discovery_config "sensor" "last_completed_started_at"
+		clear_discovery_config "sensor" "last_completed_ended_at"
+		clear_discovery_config "sensor" "last_completed_power_restored_at"
+		clear_discovery_config "sensor" "last_completed_duration_formatted"
+		clear_discovery_config "sensor" "last_completed_trigger_reason"
+		clear_discovery_config "sensor" "last_completed_last_action"
+		clear_discovery_config "sensor" "last_completed_at"
 		clear_discovery_config "binary_sensor" "ups_connected"
 		clear_discovery_config "binary_sensor" "on_battery"
+		clear_discovery_config "binary_sensor" "incident_active"
+		clear_discovery_config "binary_sensor" "failure_active"
+		clear_discovery_config "binary_sensor" "recovery_pending"
 		clear_discovery_config "binary_sensor" "ceph_noout_set"
 		clear_discovery_config "binary_sensor" "talos_shutdown_started"
 		clear_discovery_config "binary_sensor" "linux_shutdown_started"
@@ -385,15 +862,51 @@ publish_homeassistant_discovery() {
 	publish_discovery_config "sensor" "ups_runtime" "$($JQ_BIN -nc --arg name "UPS Runtime Seconds" --arg object_id "ups_runtime" --arg default_entity_id "sensor.${device_id}_ups_runtime" --arg unique_id "${device_id}_ups_runtime" --arg state_topic "$state_topic" --arg unit "s" --arg icon "mdi:timer-outline" --argjson enabled_by_default false --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.runtime | int(0) }}",unit_of_measurement:$unit,icon:$icon,enabled_by_default:$enabled_by_default,device:$device}')"
 	publish_discovery_config "sensor" "ups_runtime_formatted" "$($JQ_BIN -nc --arg name "UPS Runtime" --arg object_id "ups_runtime_formatted" --arg default_entity_id "sensor.${device_id}_ups_runtime_formatted" --arg unique_id "${device_id}_ups_runtime_formatted" --arg state_topic "$state_topic" --arg icon "mdi:timer-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.runtime_formatted }}",icon:$icon,device:$device}')"
 	publish_discovery_config "sensor" "ups_charge" "$($JQ_BIN -nc --arg name "UPS Charge" --arg object_id "ups_charge" --arg default_entity_id "sensor.${device_id}_ups_charge" --arg unique_id "${device_id}_ups_charge" --arg state_topic "$state_topic" --arg unit "%" --arg icon "mdi:battery" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.charge | int(0) }}",unit_of_measurement:$unit,icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "controller_version" "$($JQ_BIN -nc --arg name "Controller Version" --arg object_id "controller_version" --arg default_entity_id "sensor.${device_id}_controller_version" --arg unique_id "${device_id}_controller_version" --arg state_topic "$state_topic" --arg icon "mdi:source-branch" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.controller_version }}",icon:$icon,device:$device}')"
 	publish_discovery_config "sensor" "controller_mode" "$($JQ_BIN -nc --arg name "Mode" --arg object_id "mode" --arg default_entity_id "sensor.${device_id}_mode" --arg unique_id "${device_id}_controller_mode" --arg state_topic "$state_topic" --arg icon "mdi:transmission-tower" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.mode }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "controller_phase" "$($JQ_BIN -nc --arg name "Phase" --arg object_id "phase" --arg default_entity_id "sensor.${device_id}_phase" --arg unique_id "${device_id}_controller_phase" --arg state_topic "$state_topic" --arg icon "mdi:timeline-clock-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.phase }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "failure_code" "$($JQ_BIN -nc --arg name "Failure Code" --arg object_id "failure_code" --arg default_entity_id "sensor.${device_id}_failure_code" --arg unique_id "${device_id}_failure_code" --arg state_topic "$state_topic" --arg icon "mdi:alert-circle-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.failure_code }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "failure_message" "$($JQ_BIN -nc --arg name "Failure Message" --arg object_id "failure_message" --arg default_entity_id "sensor.${device_id}_failure_message" --arg unique_id "${device_id}_failure_message" --arg state_topic "$state_topic" --arg icon "mdi:message-alert-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.failure_message }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "failure_severity" "$($JQ_BIN -nc --arg name "Failure Severity" --arg object_id "failure_severity" --arg default_entity_id "sensor.${device_id}_failure_severity" --arg unique_id "${device_id}_failure_severity" --arg state_topic "$state_topic" --arg icon "mdi:alert-decagram-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.failure_severity }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "failure_at" "$($JQ_BIN -nc --arg name "Failure At" --arg object_id "failure_at" --arg default_entity_id "sensor.${device_id}_failure_at" --arg unique_id "${device_id}_failure_at" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.failure_at }}",device_class:"timestamp",device:$device}')"
 	publish_discovery_config "sensor" "recovery_status" "$($JQ_BIN -nc --arg name "Recovery Status" --arg object_id "recovery_status" --arg default_entity_id "sensor.${device_id}_recovery_status" --arg unique_id "${device_id}_recovery_status" --arg state_topic "$state_topic" --arg icon "mdi:restore-alert" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.recovery_status }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "recovery_blocker" "$($JQ_BIN -nc --arg name "Recovery Blocker" --arg object_id "recovery_blocker" --arg default_entity_id "sensor.${device_id}_recovery_blocker" --arg unique_id "${device_id}_recovery_blocker" --arg state_topic "$state_topic" --arg icon "mdi:progress-alert" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.recovery_blocker }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "recovery_elapsed_seconds" "$($JQ_BIN -nc --arg name "Recovery Elapsed Seconds" --arg object_id "recovery_elapsed_seconds" --arg default_entity_id "sensor.${device_id}_recovery_elapsed_seconds" --arg unique_id "${device_id}_recovery_elapsed_seconds" --arg state_topic "$state_topic" --arg unit "s" --arg icon "mdi:clock-alert-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.recovery_elapsed_seconds | int(0) }}",unit_of_measurement:$unit,icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "recovery_elapsed_formatted" "$($JQ_BIN -nc --arg name "Recovery Elapsed" --arg object_id "recovery_elapsed_formatted" --arg default_entity_id "sensor.${device_id}_recovery_elapsed_formatted" --arg unique_id "${device_id}_recovery_elapsed_formatted" --arg state_topic "$state_topic" --arg icon "mdi:clock-alert-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.recovery_elapsed_formatted }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "incident_status" "$($JQ_BIN -nc --arg name "Incident Status" --arg object_id "incident_status" --arg default_entity_id "sensor.${device_id}_incident_status" --arg unique_id "${device_id}_incident_status" --arg state_topic "$state_topic" --arg icon "mdi:alert-circle-check-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.incident_status }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "incident_started_at" "$($JQ_BIN -nc --arg name "Incident Started" --arg object_id "incident_started_at" --arg default_entity_id "sensor.${device_id}_incident_started_at" --arg unique_id "${device_id}_incident_started_at" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.incident_started_at }}",device_class:"timestamp",device:$device}')"
+	publish_discovery_config "sensor" "incident_ended_at" "$($JQ_BIN -nc --arg name "Incident Ended" --arg object_id "incident_ended_at" --arg default_entity_id "sensor.${device_id}_incident_ended_at" --arg unique_id "${device_id}_incident_ended_at" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.incident_ended_at }}",device_class:"timestamp",device:$device}')"
+	publish_discovery_config "sensor" "incident_power_restored_at" "$($JQ_BIN -nc --arg name "Power Restored" --arg object_id "incident_power_restored_at" --arg default_entity_id "sensor.${device_id}_incident_power_restored_at" --arg unique_id "${device_id}_incident_power_restored_at" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.incident_power_restored_at }}",device_class:"timestamp",device:$device}')"
+	publish_discovery_config "sensor" "incident_duration_seconds" "$($JQ_BIN -nc --arg name "Incident Duration Seconds" --arg object_id "incident_duration_seconds" --arg default_entity_id "sensor.${device_id}_incident_duration_seconds" --arg unique_id "${device_id}_incident_duration_seconds" --arg state_topic "$state_topic" --arg unit "s" --arg icon "mdi:timer-sand" --argjson enabled_by_default false --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.incident_duration_seconds | int(0) }}",unit_of_measurement:$unit,icon:$icon,enabled_by_default:$enabled_by_default,device:$device}')"
+	publish_discovery_config "sensor" "incident_duration_formatted" "$($JQ_BIN -nc --arg name "Incident Duration" --arg object_id "incident_duration_formatted" --arg default_entity_id "sensor.${device_id}_incident_duration_formatted" --arg unique_id "${device_id}_incident_duration_formatted" --arg state_topic "$state_topic" --arg icon "mdi:timer-sand-complete" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.incident_duration_formatted }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "incident_trigger_reason" "$($JQ_BIN -nc --arg name "Trigger Reason" --arg object_id "incident_trigger_reason" --arg default_entity_id "sensor.${device_id}_incident_trigger_reason" --arg unique_id "${device_id}_incident_trigger_reason" --arg state_topic "$state_topic" --arg icon "mdi:flash-alert" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.incident_trigger_reason }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "incident_trigger_runtime" "$($JQ_BIN -nc --arg name "Trigger Runtime Seconds" --arg object_id "incident_trigger_runtime" --arg default_entity_id "sensor.${device_id}_incident_trigger_runtime" --arg unique_id "${device_id}_incident_trigger_runtime" --arg state_topic "$state_topic" --arg unit "s" --arg icon "mdi:timer-alert-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.incident_trigger_runtime | int(0) }}",unit_of_measurement:$unit,icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "incident_trigger_charge" "$($JQ_BIN -nc --arg name "Trigger Charge" --arg object_id "incident_trigger_charge" --arg default_entity_id "sensor.${device_id}_incident_trigger_charge" --arg unique_id "${device_id}_incident_trigger_charge" --arg state_topic "$state_topic" --arg unit "%" --arg icon "mdi:battery-heart-variant" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.incident_trigger_charge | int(0) }}",unit_of_measurement:$unit,icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "last_action" "$($JQ_BIN -nc --arg name "Last Action" --arg object_id "last_action" --arg default_entity_id "sensor.${device_id}_last_action" --arg unique_id "${device_id}_last_action" --arg state_topic "$state_topic" --arg icon "mdi:play-circle-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_action }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "last_action_target" "$($JQ_BIN -nc --arg name "Last Action Target" --arg object_id "last_action_target" --arg default_entity_id "sensor.${device_id}_last_action_target" --arg unique_id "${device_id}_last_action_target" --arg state_topic "$state_topic" --arg icon "mdi:crosshairs-gps" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_action_target }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "last_action_result" "$($JQ_BIN -nc --arg name "Last Action Result" --arg object_id "last_action_result" --arg default_entity_id "sensor.${device_id}_last_action_result" --arg unique_id "${device_id}_last_action_result" --arg state_topic "$state_topic" --arg icon "mdi:check-decagram-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_action_result }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "last_action_at" "$($JQ_BIN -nc --arg name "Last Action At" --arg object_id "last_action_at" --arg default_entity_id "sensor.${device_id}_last_action_at" --arg unique_id "${device_id}_last_action_at" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_action_at }}",device_class:"timestamp",device:$device}')"
 	publish_discovery_config "sensor" "last_event" "$($JQ_BIN -nc --arg name "Last Event" --arg object_id "last_event" --arg default_entity_id "sensor.${device_id}_last_event" --arg unique_id "${device_id}_last_event" --arg state_topic "$state_topic" --arg icon "mdi:message-alert-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_event }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "last_event_at" "$($JQ_BIN -nc --arg name "Last Event At" --arg object_id "last_event_at" --arg default_entity_id "sensor.${device_id}_last_event_at" --arg unique_id "${device_id}_last_event_at" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_event_at }}",device_class:"timestamp",device:$device}')"
+	publish_discovery_config "sensor" "last_message" "$($JQ_BIN -nc --arg name "Last Message" --arg object_id "last_message" --arg default_entity_id "sensor.${device_id}_last_message" --arg unique_id "${device_id}_last_message" --arg state_topic "$state_topic" --arg icon "mdi:text-box-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_message }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "last_completed_status" "$($JQ_BIN -nc --arg name "Last Completed Status" --arg object_id "last_completed_status" --arg default_entity_id "sensor.${device_id}_last_completed_status" --arg unique_id "${device_id}_last_completed_status" --arg state_topic "$summary_topic" --arg icon "mdi:history" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_completed_status }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "last_completed_started_at" "$($JQ_BIN -nc --arg name "Last Completed Started" --arg object_id "last_completed_started_at" --arg default_entity_id "sensor.${device_id}_last_completed_started_at" --arg unique_id "${device_id}_last_completed_started_at" --arg state_topic "$summary_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_completed_started_at }}",device_class:"timestamp",device:$device}')"
+	publish_discovery_config "sensor" "last_completed_ended_at" "$($JQ_BIN -nc --arg name "Last Completed Ended" --arg object_id "last_completed_ended_at" --arg default_entity_id "sensor.${device_id}_last_completed_ended_at" --arg unique_id "${device_id}_last_completed_ended_at" --arg state_topic "$summary_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_completed_ended_at }}",device_class:"timestamp",device:$device}')"
+	publish_discovery_config "sensor" "last_completed_power_restored_at" "$($JQ_BIN -nc --arg name "Last Completed Power Restored" --arg object_id "last_completed_power_restored_at" --arg default_entity_id "sensor.${device_id}_last_completed_power_restored_at" --arg unique_id "${device_id}_last_completed_power_restored_at" --arg state_topic "$summary_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_completed_power_restored_at }}",device_class:"timestamp",device:$device}')"
+	publish_discovery_config "sensor" "last_completed_duration_formatted" "$($JQ_BIN -nc --arg name "Last Completed Duration" --arg object_id "last_completed_duration_formatted" --arg default_entity_id "sensor.${device_id}_last_completed_duration_formatted" --arg unique_id "${device_id}_last_completed_duration_formatted" --arg state_topic "$summary_topic" --arg icon "mdi:timer-sand-complete" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_completed_duration_formatted }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "last_completed_trigger_reason" "$($JQ_BIN -nc --arg name "Last Completed Trigger Reason" --arg object_id "last_completed_trigger_reason" --arg default_entity_id "sensor.${device_id}_last_completed_trigger_reason" --arg unique_id "${device_id}_last_completed_trigger_reason" --arg state_topic "$summary_topic" --arg icon "mdi:flash-alert" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_completed_trigger_reason }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "last_completed_last_action" "$($JQ_BIN -nc --arg name "Last Completed Last Action" --arg object_id "last_completed_last_action" --arg default_entity_id "sensor.${device_id}_last_completed_last_action" --arg unique_id "${device_id}_last_completed_last_action" --arg state_topic "$summary_topic" --arg icon "mdi:play-circle-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_completed_last_action }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "last_completed_at" "$($JQ_BIN -nc --arg name "Last Completed At" --arg object_id "last_completed_at" --arg default_entity_id "sensor.${device_id}_last_completed_at" --arg unique_id "${device_id}_last_completed_at" --arg state_topic "$summary_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.last_completed_at }}",device_class:"timestamp",device:$device}')"
 	publish_discovery_config "binary_sensor" "ups_connected" "$($JQ_BIN -nc --arg name "UPS Connected" --arg object_id "ups_connected" --arg default_entity_id "binary_sensor.${device_id}_ups_connected" --arg unique_id "${device_id}_ups_connected" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.ups_connected | string | lower }}",device_class:"connectivity",device:$device}')"
 	publish_discovery_config "binary_sensor" "on_battery" "$($JQ_BIN -nc --arg name "On Battery" --arg object_id "on_battery" --arg default_entity_id "binary_sensor.${device_id}_on_battery" --arg unique_id "${device_id}_on_battery" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.on_battery | string | lower }}",device_class:"power",device:$device}')"
+	publish_discovery_config "binary_sensor" "incident_active" "$($JQ_BIN -nc --arg name "Incident Active" --arg object_id "incident_active" --arg default_entity_id "binary_sensor.${device_id}_incident_active" --arg unique_id "${device_id}_incident_active" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.incident_active | string | lower }}",device_class:"problem",device:$device}')"
+	publish_discovery_config "binary_sensor" "failure_active" "$($JQ_BIN -nc --arg name "Failure Active" --arg object_id "failure_active" --arg default_entity_id "binary_sensor.${device_id}_failure_active" --arg unique_id "${device_id}_failure_active" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.failure_active | string | lower }}",device_class:"problem",device:$device}')"
+	publish_discovery_config "binary_sensor" "recovery_pending" "$($JQ_BIN -nc --arg name "Recovery Pending" --arg object_id "recovery_pending" --arg default_entity_id "binary_sensor.${device_id}_recovery_pending" --arg unique_id "${device_id}_recovery_pending" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.recovery_pending | string | lower }}",device_class:"problem",device:$device}')"
 	publish_discovery_config "binary_sensor" "ceph_noout_set" "$($JQ_BIN -nc --arg name "Ceph Noout Set" --arg object_id "ceph_noout_set" --arg default_entity_id "binary_sensor.${device_id}_ceph_noout_set" --arg unique_id "${device_id}_ceph_noout_set" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.ceph_noout_set | string | lower }}",device:$device}')"
 	publish_discovery_config "binary_sensor" "talos_shutdown_started" "$($JQ_BIN -nc --arg name "Talos Shutdown Started" --arg object_id "talos_shutdown_started" --arg default_entity_id "binary_sensor.${device_id}_talos_shutdown_started" --arg unique_id "${device_id}_talos_shutdown_started" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.talos_shutdown_started | string | lower }}",device:$device}')"
 	publish_discovery_config "binary_sensor" "linux_shutdown_started" "$($JQ_BIN -nc --arg name "Linux Shutdown Started" --arg object_id "linux_shutdown_started" --arg default_entity_id "binary_sensor.${device_id}_linux_shutdown_started" --arg unique_id "${device_id}_linux_shutdown_started" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.linux_shutdown_started | string | lower }}",device:$device}')"
 	publish_discovery_config "binary_sensor" "proxmox_shutdown_started" "$($JQ_BIN -nc --arg name "Proxmox Shutdown Started" --arg object_id "proxmox_shutdown_started" --arg default_entity_id "binary_sensor.${device_id}_proxmox_shutdown_started" --arg unique_id "${device_id}_proxmox_shutdown_started" --arg state_topic "$state_topic" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,payload_on:"true",payload_off:"false",value_template:"{{ value_json.proxmox_shutdown_started | string | lower }}",device:$device}')"
+
 	write_state_value "ha_discovery.schema_version" "$MQTT_DISCOVERY_SCHEMA_VERSION"
 	record_discovery_publish
 }
@@ -423,130 +936,6 @@ log_startup_summary() {
 	fi
 }
 
-format_seconds_hms() {
-	seconds="$1"
-	case "$seconds" in
-		''|*[!0-9-]*)
-			printf '%s\n' "unknown"
-			return 0
-			;;
-		-*)
-			printf '%s\n' "unknown"
-			return 0
-			;;
-	esac
-
-	hours=$((seconds / 3600))
-	minutes=$(((seconds % 3600) / 60))
-	remaining_seconds=$((seconds % 60))
-	printf '%02d:%02d:%02d\n' "$hours" "$minutes" "$remaining_seconds"
-}
-
-split_csv() {
-	value="$1"
-	old_ifs="$IFS"
-	IFS=','
-	set -- $value
-	IFS="$old_ifs"
-	for item in "$@"; do
-		if [ -n "$item" ]; then
-			printf '%s\n' "$item"
-		fi
-	done
-}
-
-normal_status_snapshot() {
-	status="$1"
-	printf 'status=%s\n' "$status"
-}
-
-battery_action_stage() {
-	runtime="$1"
-
-	if [ "$runtime" -lt 0 ]; then
-		printf '%s\n' "unknown"
-		return 0
-	fi
-
-	if [ "$runtime" -le "$PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
-		printf '%s\n' "proxmox_shutdown"
-		return 0
-	fi
-
-	if [ "$runtime" -le "$LINUX_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
-		printf '%s\n' "linux_shutdown"
-		return 0
-	fi
-
-	if [ "$runtime" -le "$TALOS_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
-		printf '%s\n' "talos_shutdown"
-		return 0
-	fi
-
-	if [ "$runtime" -le "$NOOUT_MIN_RUNTIME_SECONDS" ]; then
-		printf '%s\n' "ceph_noout"
-		return 0
-	fi
-
-	printf '%s\n' "monitoring"
-}
-
-battery_status_snapshot() {
-	status="$1"
-	runtime="$2"
-	charge="$3"
-	stage="$(battery_action_stage "$runtime")"
-	printf 'status=%s stage=%s charge=%s\n' "$status" "$stage" "$charge"
-}
-
-should_log_status() {
-	snapshot="$1"
-	prefix="$2"
-	state_prefix="$STATE_DIR/$prefix"
-	last_snapshot_file="${state_prefix}.snapshot"
-	last_log_time_file="${state_prefix}.time"
-
-	if [ ! -f "$last_snapshot_file" ] || [ ! -f "$last_log_time_file" ]; then
-		return 0
-	fi
-
-	last_snapshot="$(cat "$last_snapshot_file" 2>/dev/null || true)"
-	if [ "$snapshot" != "$last_snapshot" ]; then
-		return 0
-	fi
-
-	case "$STATUS_LOG_INTERVAL_SECONDS" in
-		''|*[!0-9]*)
-			return 1
-			;;
-		0)
-			return 1
-			;;
-	esac
-
-	now="$(date +%s)"
-	last_log_time="$(cat "$last_log_time_file" 2>/dev/null || printf '0')"
-	case "$last_log_time" in
-		''|*[!0-9]*)
-			return 0
-			;;
-	esac
-
-	if [ $((now - last_log_time)) -ge "$STATUS_LOG_INTERVAL_SECONDS" ]; then
-		return 0
-	fi
-
-	return 1
-}
-
-record_status_log() {
-	snapshot="$1"
-	prefix="$2"
-	state_prefix="$STATE_DIR/$prefix"
-	printf '%s\n' "$snapshot" >"${state_prefix}.snapshot"
-	date +%s >"${state_prefix}.time"
-}
-
 log_status_summary() {
 	mode="$1"
 	status="$2"
@@ -560,7 +949,7 @@ log_status_summary() {
 	fi
 
 	if should_log_status "$snapshot" "$prefix"; then
-		log "$mode: status=$status runtime=$runtime charge=$charge"
+		log "$mode: status=$status runtime=$runtime charge=$charge phase=$(read_state_value "controller.phase" "monitoring") incident_status=$(read_state_value "incident.status" "idle")"
 		record_status_log "$snapshot" "$prefix"
 	fi
 	mqtt_publish_state "$status" "$runtime" "$charge" "$prefix" "true"
@@ -634,12 +1023,8 @@ nut_field() {
 runtime_seconds() {
 	runtime_value="$(nut_field battery.runtime)"
 	case "$runtime_value" in
-		''|*[!0-9]*)
-			printf '%s\n' "-1"
-			;;
-		*)
-			printf '%s\n' "$runtime_value"
-			;;
+		''|*[!0-9]*) printf '%s\n' "-1" ;;
+		*) printf '%s\n' "$runtime_value" ;;
 	esac
 }
 
@@ -654,15 +1039,161 @@ is_on_battery() {
 	esac
 }
 
-set_ceph_noout() {
-	require_executable "$KUBECTL_BIN"
+open_incident_if_needed() {
+	status="$1"
+	runtime="$2"
+	charge="$3"
+	if [ "$(incident_status_value)" = "active" ]; then
+		return 1
+	fi
 
-	run_action \
-		"set ceph noout" \
-		"$KUBECTL_BIN" -n "$CEPH_NAMESPACE" exec "deploy/$CEPH_TOOLS_DEPLOYMENT" -- ceph osd set noout
+	incident_id="$(date -u +%Y%m%dT%H%M%SZ)"
+	timestamp="$(current_timestamp)"
+	reset_incident_state_for_new_event
+	write_state_value "incident.id" "$incident_id"
+	write_state_value "incident.status" "active"
+	write_state_value "incident.started_at" "$timestamp"
+	write_state_value "incident.trigger_reason" "ups_on_battery"
+	write_state_value "incident.trigger_status" "$status"
+	write_state_value "incident.trigger_runtime" "$runtime"
+	write_state_value "incident.trigger_charge" "$charge"
+	set_controller_phase "on_battery"
+	set_recovery_status "idle" "" "0"
+	log "incident opened: id=$incident_id status=$status runtime=$runtime charge=$charge"
+	mqtt_publish_event "power_loss_detected" "UPS entered battery mode" "warning" "$status" "$runtime" "$charge" "on_battery" "ups_on_battery"
+	return 0
+}
+
+transition_battery_stage() {
+	status="$1"
+	runtime="$2"
+	charge="$3"
+	stage="$(battery_action_stage "$runtime")"
+	previous_stage="$(read_state_value "battery.stage" "")"
+	phase="$(controller_phase_for_status "$status" "$runtime")"
+	write_state_value "battery.stage" "$stage"
+	set_controller_phase "$phase"
+
+	if [ "$stage" = "$previous_stage" ]; then
+		return 0
+	fi
+
+	case "$stage" in
+		monitoring|unknown)
+			return 0
+			;;
+	esac
+
+	reason="runtime threshold crossed for $stage at ${runtime}s"
+	write_state_value "incident.trigger_reason" "$reason"
+	write_state_value "incident.trigger_status" "$status"
+	write_state_value "incident.trigger_runtime" "$runtime"
+	write_state_value "incident.trigger_charge" "$charge"
+	log "threshold crossed: stage=$stage runtime=$runtime charge=$charge"
+	mqtt_publish_event "threshold_crossed" "$reason" "warning" "$status" "$runtime" "$charge" "$phase" "$reason" "threshold" "$stage"
+}
+
+handle_line_power_restored() {
+	status="$1"
+	runtime="$2"
+	charge="$3"
+	incident_status="$(incident_status_value)"
+	case "$incident_status" in
+		active) ;;
+		*) return 0 ;;
+	esac
+
+	timestamp="$(current_timestamp)"
+	now_epoch="$(current_epoch)"
+	started_epoch="$(date -d "$(read_state_value "incident.started_at" "$timestamp")" +%s 2>/dev/null || printf '%s' "$now_epoch")"
+	duration_seconds="$(duration_between_epochs "$started_epoch" "$now_epoch")"
+	write_state_value "incident.power_restored_at" "$timestamp"
+	write_state_value "incident.ended_at" "$timestamp"
+	write_state_value "incident.duration_seconds" "$duration_seconds"
+
+	if [ "$(marker_bool "ceph_noout")" = "true" ]; then
+		write_state_value "incident.status" "recovery_pending"
+		set_controller_phase "power_restored_recovery_pending"
+		set_recovery_status "pending_boot" "waiting_for_controller_reboot" "0"
+		clear_shutdown_markers
+		log "line power restored; recovery is pending because ceph noout remains set"
+		mqtt_publish_event "line_power_restored" "Line power restored; recovery pending" "ok" "$status" "$runtime" "$charge" "power_restored_recovery_pending" "ceph_noout_remains_set"
+		return 0
+	fi
+
+	write_state_value "incident.status" "recovered"
+	set_controller_phase "monitoring"
+	set_recovery_status "idle" "" "0"
+	clear_all_action_markers
+	log "line power restored; incident closed after ${duration_seconds}s"
+	mqtt_publish_event "line_power_restored" "Line power restored" "ok" "$status" "$runtime" "$charge" "monitoring" "line_power_restored"
+	mqtt_publish_event "incident_closed" "Power incident closed" "ok" "$status" "$runtime" "$charge" "monitoring" "incident_closed"
+	store_last_completed_summary
+	clear_incident_state
+}
+
+run_once() {
+	name="$1"
+	shift
+
+	marker="$STATE_DIR/$name.done"
+	if [ -f "$marker" ]; then
+		return 0
+	fi
+
+	if "$@"; then
+		: >"$marker"
+		return 0
+	fi
+
+	return 1
+}
+
+run_action() {
+	label="$1"
+	event_name="$2"
+	target_type="$3"
+	target_name="$4"
+	status="$5"
+	runtime="$6"
+	charge="$7"
+	phase="$8"
+	shift 8
+
+	if [ "$DRY_RUN" = "true" ]; then
+		log "dry-run: $label"
+		set_last_action "$event_name" "$target_name" "dry-run"
+		mqtt_publish_event "$event_name" "$label" "dry-run" "$status" "$runtime" "$charge" "$phase" "$label" "$target_type" "$target_name" "dry-run"
+		return 0
+	fi
+
+	log "running: $label"
+	mqtt_publish_event "$event_name" "$label" "running" "$status" "$runtime" "$charge" "$phase" "$label" "$target_type" "$target_name" "running"
+	if "$@"; then
+		set_last_action "$event_name" "$target_name" "ok"
+		mqtt_publish_event "${event_name}_complete" "$label complete" "ok" "$status" "$runtime" "$charge" "$phase" "$label" "$target_type" "$target_name" "ok"
+		return 0
+	fi
+
+	exit_code="$?"
+	set_last_action "$event_name" "$target_name" "failed"
+	log "failed: $label exit_code=$exit_code"
+	mqtt_publish_event "${event_name}_failed" "$label failed" "error" "$status" "$runtime" "$charge" "$phase" "$label" "$target_type" "$target_name" "failed" "exit_code=$exit_code"
+	return "$exit_code"
+}
+
+set_ceph_noout() {
+	status="$1"
+	runtime="$2"
+	charge="$3"
+	require_executable "$KUBECTL_BIN"
+	run_action "set ceph noout" "ceph_noout_set" "ceph" "cluster" "$status" "$runtime" "$charge" "ceph_noout" "$KUBECTL_BIN" -n "$CEPH_NAMESPACE" exec "deploy/$CEPH_TOOLS_DEPLOYMENT" -- ceph osd set noout
 }
 
 shutdown_talos_nodes() {
+	status="$1"
+	runtime="$2"
+	charge="$3"
 	nodes="$(split_csv "${TALOS_NODES:-}")"
 	if [ -z "$nodes" ]; then
 		log "no TALOS_NODES configured"
@@ -670,9 +1201,8 @@ shutdown_talos_nodes() {
 	fi
 
 	require_executable "$TALOSCTL_BIN"
-
 	printf '%s\n' "$nodes" | while IFS= read -r node; do
-		run_action "shutdown Talos node $node" "$TALOSCTL_BIN" -n "$node" shutdown --wait=false
+		run_action "shutdown Talos node $node" "talos_shutdown_started" "talos" "$node" "$status" "$runtime" "$charge" "talos_shutdown" "$TALOSCTL_BIN" -n "$node" shutdown --wait=false
 	done
 }
 
@@ -711,6 +1241,9 @@ linux_shutdown_over_ssh() {
 }
 
 shutdown_linux_nodes() {
+	status="$1"
+	runtime="$2"
+	charge="$3"
 	targets_json="$(linux_shutdown_targets_json)"
 	if [ "$targets_json" = '[]' ]; then
 		log "no LINUX_SHUTDOWN_TARGETS configured"
@@ -736,8 +1269,7 @@ shutdown_linux_nodes() {
 		if [ -n "$name" ]; then
 			label="$name"
 		fi
-
-		run_action "shutdown Linux node $label" linux_shutdown_over_ssh "$host" "$user" "$port" "$remote_command"
+		run_action "shutdown Linux node $label" "linux_shutdown_started" "linux" "$label" "$status" "$runtime" "$charge" "linux_shutdown" linux_shutdown_over_ssh "$host" "$user" "$port" "$remote_command"
 	done
 }
 
@@ -790,6 +1322,9 @@ pve_api_request() {
 }
 
 shutdown_proxmox_nodes() {
+	status="$1"
+	runtime="$2"
+	charge="$3"
 	if [ -z "${PVE_API_ENDPOINT:-}" ] || [ -z "${PVE_API_USER:-}" ]; then
 		log "PVE_API_* is not configured; skipping Proxmox shutdown"
 		return 0
@@ -802,7 +1337,7 @@ shutdown_proxmox_nodes() {
 	fi
 
 	printf '%s\n' "$nodes" | while IFS= read -r node; do
-		run_action "shutdown Proxmox node $node" pve_api_request POST "/nodes/$node/status" "command=shutdown"
+		run_action "shutdown Proxmox node $node" "proxmox_shutdown_started" "proxmox" "$node" "$status" "$runtime" "$charge" "proxmox_shutdown" pve_api_request POST "/nodes/$node/status" "command=shutdown"
 	done
 }
 
@@ -810,45 +1345,43 @@ handle_battery_event() {
 	status="$1"
 	runtime="$2"
 	charge="$3"
-
+	persist_ups_snapshot "$status" "$runtime" "$charge" "true"
+	open_incident_if_needed "$status" "$runtime" "$charge" || true
+	transition_battery_stage "$status" "$runtime" "$charge"
 	log_status_summary "UPS on battery" "$status" "$runtime" "$charge" "battery"
 
 	if [ "$runtime" -lt 0 ]; then
 		log "battery.runtime is unavailable; skipping threshold-based actions"
-		mqtt_publish_event "battery_runtime_unavailable" "battery.runtime is unavailable; skipping threshold-based actions" "warning"
+		mqtt_publish_event "battery_runtime_unavailable" "battery.runtime is unavailable; skipping threshold-based actions" "warning" "$status" "$runtime" "$charge" "on_battery" "battery_runtime_unavailable"
 		mqtt_publish_state "$status" "$runtime" "$charge" "battery" "true"
 		return 0
 	fi
 
 	if [ "$runtime" -le "$NOOUT_MIN_RUNTIME_SECONDS" ]; then
-		run_once ceph_noout set_ceph_noout || true
+		run_once ceph_noout set_ceph_noout "$status" "$runtime" "$charge" || true
 	fi
 
 	if [ "$runtime" -le "$TALOS_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
-		run_once talos_shutdown shutdown_talos_nodes || true
+		run_once talos_shutdown shutdown_talos_nodes "$status" "$runtime" "$charge" || true
 	fi
 
 	if [ "$runtime" -le "$LINUX_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
-		run_once linux_shutdown shutdown_linux_nodes || true
+		run_once linux_shutdown shutdown_linux_nodes "$status" "$runtime" "$charge" || true
 	fi
 
 	if [ "$runtime" -le "$PROXMOX_SHUTDOWN_MIN_RUNTIME_SECONDS" ]; then
-		run_once proxmox_shutdown shutdown_proxmox_nodes || true
+		run_once proxmox_shutdown shutdown_proxmox_nodes "$status" "$runtime" "$charge" || true
 	fi
 }
 
-reset_event_state() {
-	if [ "$RECOVERY_STATE_RESET_ON_LINE_POWER" != "true" ]; then
-		return 0
-	fi
-
-	rm -f \
-		"$STATE_DIR/ceph_noout.done" \
-		"$STATE_DIR/talos_shutdown.done" \
-		"$STATE_DIR/linux_shutdown.done" \
-		"$STATE_DIR/proxmox_shutdown.done"
-	write_state_value "last_event" ""
-	write_state_value "last_message" ""
+handle_normal_status() {
+	status="$1"
+	runtime="$2"
+	charge="$3"
+	persist_ups_snapshot "$status" "$runtime" "$charge" "true"
+	handle_line_power_restored "$status" "$runtime" "$charge"
+	set_controller_phase "$(controller_phase_for_status "$status" "$runtime")"
+	log_status_summary "UPS status" "$status" "$runtime" "$charge" "normal"
 }
 
 main() {
@@ -867,9 +1400,15 @@ main() {
 		require_command "$UPSC_BIN"
 	fi
 
+	if [ -z "$(read_state_value "controller.phase" "")" ]; then
+		set_controller_phase "monitoring"
+	fi
+
+	normalize_startup_state
+
 	log_startup_summary
 	publish_homeassistant_discovery
-	mqtt_publish_event "startup" "shutdown controller started" "ok"
+	mqtt_publish_event "startup" "shutdown controller started" "ok" "unknown" "-1" "" "monitoring" "controller_startup"
 	log "starting controller loop for $NUT_TARGET"
 
 	while true; do
@@ -882,8 +1421,10 @@ main() {
 		fi
 
 		if [ -z "$status" ]; then
+			persist_ups_snapshot "unknown" "-1" "" "false"
+			set_controller_phase "ups_disconnected"
 			log "unable to read UPS status from $NUT_TARGET"
-			mqtt_publish_event "ups_unavailable" "unable to read UPS status" "warning"
+			mqtt_publish_event "ups_unavailable" "unable to read UPS status" "warning" "unknown" "-1" "$charge" "ups_disconnected" "ups_unavailable"
 			mqtt_publish_state "unknown" "-1" "" "disconnected" "false"
 			sleep "$POLL_INTERVAL_SECONDS"
 			continue
@@ -892,8 +1433,7 @@ main() {
 		if is_on_battery "$status"; then
 			handle_battery_event "$status" "$runtime" "$charge"
 		else
-			reset_event_state
-			log_status_summary "UPS status" "$status" "$runtime" "$charge" "normal"
+			handle_normal_status "$status" "$runtime" "$charge"
 		fi
 
 		sleep "$POLL_INTERVAL_SECONDS"
