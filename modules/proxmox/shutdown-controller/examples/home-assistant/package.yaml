@@ -1,29 +1,22 @@
 template:
   - binary_sensor:
-      - name: Shutdown Controller Incident Active
-        unique_id: shutdown_controller_incident_active
+      - name: Shutdown Controller Needs Attention
+        unique_id: shutdown_controller_needs_attention
         state: >-
           {{
-            is_state('binary_sensor.shutdown_controller_on_battery', 'on')
-            or is_state('binary_sensor.shutdown_controller_ceph_noout_set', 'on')
-            or is_state('binary_sensor.shutdown_controller_talos_shutdown_started', 'on')
-            or is_state('binary_sensor.shutdown_controller_linux_shutdown_started', 'on')
-            or is_state('binary_sensor.shutdown_controller_proxmox_shutdown_started', 'on')
+            is_state('binary_sensor.shutdown_controller_incident_active', 'on')
+            or is_state('binary_sensor.shutdown_controller_failure_active', 'on')
+            or is_state('binary_sensor.shutdown_controller_recovery_pending', 'on')
+            or is_state('binary_sensor.shutdown_controller_ups_connected', 'off')
+            or is_state('sensor.shutdown_controller_last_action_result', 'failed')
           }}
         icon: >-
-          {% if is_state('binary_sensor.shutdown_controller_incident_active',
+          {% if is_state('binary_sensor.shutdown_controller_needs_attention',
           'on') %}
             mdi:alert-octagon
           {% else %}
             mdi:shield-check
           {% endif %}
-
-      - name: Shutdown Controller Recovery Pending
-        unique_id: shutdown_controller_recovery_pending
-        state: >-
-          {{ states('sensor.shutdown_controller_recovery_status') in ['waiting',
-          'timeout'] }}
-        icon: mdi:restore-alert
 
   - sensor:
       - name: Shutdown Controller Summary
@@ -32,31 +25,37 @@ template:
           {% if is_state('binary_sensor.shutdown_controller_ups_connected',
           'off') %}
             UPS disconnected
-          {% elif is_state('binary_sensor.shutdown_controller_on_battery', 'on')
-          %}
-            On battery
-          {% elif is_state('binary_sensor.shutdown_controller_ceph_noout_set',
-          'on') %}
-            Ceph noout set
-          {% elif
-          is_state('binary_sensor.shutdown_controller_talos_shutdown_started',
-          'on') %}
-            Talos shutdown started
-          {% elif
-          is_state('binary_sensor.shutdown_controller_linux_shutdown_started',
-          'on') %}
-            Linux shutdown started
-          {% elif
-          is_state('binary_sensor.shutdown_controller_proxmox_shutdown_started',
-          'on') %}
-            Proxmox shutdown started
-          {% elif is_state('sensor.shutdown_controller_recovery_status',
-          'complete') %}
-            Recovery complete
+          {% elif is_state('binary_sensor.shutdown_controller_failure_active', 'on') %}
+            Failure {{ states('sensor.shutdown_controller_failure_code') | replace('_', ' ') }}
+          {% elif states('sensor.shutdown_controller_incident_status') not in
+          ['unknown', 'unavailable', '', 'idle'] %}
+            {{ states('sensor.shutdown_controller_incident_status') | replace('_', ' ') | title }}
+          {% elif states('sensor.shutdown_controller_recovery_status') not in
+          ['unknown', 'unavailable', '', 'idle'] %}
+            Recovery {{ states('sensor.shutdown_controller_recovery_status') | replace('_', ' ') }}
+          {% elif states('sensor.shutdown_controller_phase') not in
+          ['unknown', 'unavailable', 'monitoring'] %}
+            {{ states('sensor.shutdown_controller_phase') | replace('_', ' ') | title }}
           {% else %}
             Healthy
           {% endif %}
         icon: mdi:timeline-text
+
+      - name: Shutdown Controller Last Incident
+        unique_id: shutdown_controller_last_incident
+        state: >-
+          {% set reason = states('sensor.shutdown_controller_last_completed_trigger_reason') %}
+          {% set duration = states('sensor.shutdown_controller_last_completed_duration_formatted') %}
+          {% set action = states('sensor.shutdown_controller_last_completed_last_action') %}
+          {% if states('sensor.shutdown_controller_last_completed_status') in ['unknown', 'unavailable', '', 'idle'] %}
+            No recorded incident
+          {% else %}
+            {{ states('sensor.shutdown_controller_last_completed_status') | replace('_', ' ') | title }}
+            | {{ reason if reason not in ['unknown', 'unavailable', ''] else 'no trigger reason' }}
+            | duration {{ duration if duration not in ['unknown', 'unavailable', ''] else 'unknown' }}
+            | last action {{ action if action not in ['unknown', 'unavailable', ''] else 'none' }}
+          {% endif %}
+        icon: mdi:note-text-outline
 
 group:
   shutdown_controller_entities:
@@ -69,14 +68,51 @@ group:
       - binary_sensor.shutdown_controller_linux_shutdown_started
       - binary_sensor.shutdown_controller_proxmox_shutdown_started
       - binary_sensor.shutdown_controller_incident_active
+      - binary_sensor.shutdown_controller_failure_active
       - binary_sensor.shutdown_controller_recovery_pending
+      - binary_sensor.shutdown_controller_needs_attention
       - sensor.shutdown_controller_ups_status
+      - sensor.shutdown_controller_ups_runtime
       - sensor.shutdown_controller_ups_runtime_formatted
       - sensor.shutdown_controller_ups_charge
+      - sensor.shutdown_controller_controller_version
+      - sensor.shutdown_controller_mqtt_schema_version
       - sensor.shutdown_controller_mode
+      - sensor.shutdown_controller_phase
+      - sensor.shutdown_controller_failure_code
+      - sensor.shutdown_controller_failure_message
+      - sensor.shutdown_controller_failure_severity
+      - sensor.shutdown_controller_failure_at
+      - sensor.shutdown_controller_incident_status
+      - sensor.shutdown_controller_incident_started_at
+      - sensor.shutdown_controller_incident_ended_at
+      - sensor.shutdown_controller_incident_power_restored_at
+      - sensor.shutdown_controller_incident_duration_seconds
+      - sensor.shutdown_controller_incident_duration_formatted
+      - sensor.shutdown_controller_incident_trigger_reason
+      - sensor.shutdown_controller_incident_trigger_runtime
+      - sensor.shutdown_controller_incident_trigger_charge
       - sensor.shutdown_controller_recovery_status
+      - sensor.shutdown_controller_recovery_blocker
+      - sensor.shutdown_controller_recovery_elapsed_seconds
+      - sensor.shutdown_controller_recovery_elapsed_formatted
       - sensor.shutdown_controller_last_event
+      - sensor.shutdown_controller_last_event_at
+      - sensor.shutdown_controller_last_message
+      - sensor.shutdown_controller_last_action
+      - sensor.shutdown_controller_last_action_target
+      - sensor.shutdown_controller_last_action_result
+      - sensor.shutdown_controller_last_action_at
+      - sensor.shutdown_controller_last_completed_status
+      - sensor.shutdown_controller_last_completed_started_at
+      - sensor.shutdown_controller_last_completed_ended_at
+      - sensor.shutdown_controller_last_completed_power_restored_at
+      - sensor.shutdown_controller_last_completed_duration_formatted
+      - sensor.shutdown_controller_last_completed_trigger_reason
+      - sensor.shutdown_controller_last_completed_last_action
+      - sensor.shutdown_controller_last_completed_at
       - sensor.shutdown_controller_summary
+      - sensor.shutdown_controller_last_incident
 
 automation:
   - id: shutdown_controller_package_alert
@@ -86,7 +122,7 @@ automation:
     mode: single
     trigger:
       - platform: state
-        entity_id: binary_sensor.shutdown_controller_incident_active
+        entity_id: binary_sensor.shutdown_controller_needs_attention
         to: "on"
     action:
       - service: persistent_notification.create
@@ -94,6 +130,11 @@ automation:
           title: Shutdown controller incident active
           message: >-
             Summary: {{ states('sensor.shutdown_controller_summary') }}.
+            Incident status: {{ states('sensor.shutdown_controller_incident_status') }}.
+            Trigger reason: {{ states('sensor.shutdown_controller_incident_trigger_reason') }}.
             Runtime: {{ states('sensor.shutdown_controller_ups_runtime_formatted') }}.
             Charge: {{ states('sensor.shutdown_controller_ups_charge') }}%.
-            Last event: {{ states('sensor.shutdown_controller_last_event') }}.
+            Failure: {{ states('sensor.shutdown_controller_failure_code') }}.
+            Last action: {{ states('sensor.shutdown_controller_last_action') }} on {{ states('sensor.shutdown_controller_last_action_target') }}.
+            Recovery blocker: {{ states('sensor.shutdown_controller_recovery_blocker') }}.
+            Last message: {{ states('sensor.shutdown_controller_last_message') }}.

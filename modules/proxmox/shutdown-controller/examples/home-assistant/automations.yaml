@@ -1,21 +1,22 @@
 - id: shutdown_controller_on_battery_alert
   alias: Shutdown Controller - UPS On Battery
-  description: Notify when the shutdown controller detects that the UPS is on battery.
+  description: Notify when the shutdown controller opens a new outage incident.
   mode: single
   trigger:
     - platform: state
-      entity_id: binary_sensor.shutdown_controller_on_battery
-      to: "on"
+      entity_id: sensor.shutdown_controller_incident_status
+      to: active
   action:
     - service: persistent_notification.create
       data:
-        title: Shutdown controller on battery
+        title: Shutdown controller detected a power event
         message: >-
-          The shutdown controller is reporting an on-battery event. UPS status:
-          {{ states('sensor.shutdown_controller_ups_status') }}. Runtime
-          remaining: {{
-          states('sensor.shutdown_controller_ups_runtime_formatted') }}. Charge:
-          {{ states('sensor.shutdown_controller_ups_charge') }}%.
+          Incident {{ states('sensor.shutdown_controller_incident_status') }}.
+          Trigger: {{ states('sensor.shutdown_controller_incident_trigger_reason') }}.
+          UPS status: {{ states('sensor.shutdown_controller_ups_status') }}.
+          Runtime remaining: {{ states('sensor.shutdown_controller_ups_runtime_formatted') }}.
+          Charge: {{ states('sensor.shutdown_controller_ups_charge') }}%.
+          Last message: {{ states('sensor.shutdown_controller_last_message') }}.
 
 - id: shutdown_controller_recovery_complete
   alias: Shutdown Controller - Recovery Complete
@@ -30,8 +31,67 @@
       data:
         title: Shutdown controller recovery complete
         message: >-
-          Recovery completed successfully and Ceph noout was unset. Last event:
-          {{ states('sensor.shutdown_controller_last_event') }}.
+          Recovery completed successfully and Ceph noout was unset.
+          Last completed duration: {{ states('sensor.shutdown_controller_last_completed_duration_formatted') }}.
+          Last completed action: {{ states('sensor.shutdown_controller_last_completed_last_action') }}.
+          Last completed at: {{ states('sensor.shutdown_controller_last_completed_at') }}.
+
+- id: shutdown_controller_recovery_blocked
+  alias: Shutdown Controller - Recovery Blocked
+  description: Notify when recovery is waiting on a blocker that needs attention.
+  mode: restart
+  trigger:
+    - platform: state
+      entity_id: sensor.shutdown_controller_recovery_blocker
+  condition:
+    - condition: template
+      value_template: >-
+        {{ trigger.to_state.state not in ['unknown', 'unavailable', '', 'starting_checks'] }}
+  action:
+    - service: persistent_notification.create
+      data:
+        title: Shutdown controller recovery is blocked
+        message: >-
+          Recovery status: {{ states('sensor.shutdown_controller_recovery_status') }}.
+          Blocker: {{ states('sensor.shutdown_controller_recovery_blocker') }}.
+          Elapsed: {{ states('sensor.shutdown_controller_recovery_elapsed_formatted') }}.
+          Last message: {{ states('sensor.shutdown_controller_last_message') }}.
+
+- id: shutdown_controller_action_failed
+  alias: Shutdown Controller - Action Failed
+  description: Notify when the controller records a failed shutdown or recovery action.
+  mode: queued
+  trigger:
+    - platform: state
+      entity_id: sensor.shutdown_controller_last_action_result
+      to: failed
+  action:
+    - service: persistent_notification.create
+      data:
+        title: Shutdown controller action failed
+        message: >-
+          Action: {{ states('sensor.shutdown_controller_last_action') }}.
+          Target: {{ states('sensor.shutdown_controller_last_action_target') }}.
+          Incident: {{ states('sensor.shutdown_controller_incident_status') }}.
+          Last message: {{ states('sensor.shutdown_controller_last_message') }}.
+
+- id: shutdown_controller_failure_active
+  alias: Shutdown Controller - Failure Active
+  description: Notify when the controller promotes a current failure into first-class state.
+  mode: restart
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.shutdown_controller_failure_active
+      to: "on"
+  action:
+    - service: persistent_notification.create
+      data:
+        title: Shutdown controller failure active
+        message: >-
+          Failure: {{ states('sensor.shutdown_controller_failure_code') }}.
+          Severity: {{ states('sensor.shutdown_controller_failure_severity') }}.
+          Message: {{ states('sensor.shutdown_controller_failure_message') }}.
+          At: {{ states('sensor.shutdown_controller_failure_at') }}.
 
 - id: shutdown_controller_ups_disconnected
   alias: Shutdown Controller - UPS Connectivity Lost
@@ -49,5 +109,6 @@
         title: Shutdown controller lost UPS connectivity
         message: >-
           The shutdown controller can no longer reach the UPS. Controller mode:
-          {{ states('sensor.shutdown_controller_mode') }}. Last event: {{
-          states('sensor.shutdown_controller_last_event') }}.
+          {{ states('sensor.shutdown_controller_mode') }}. Recovery blocker:
+          {{ states('sensor.shutdown_controller_recovery_blocker') }}. Last event:
+          {{ states('sensor.shutdown_controller_last_event') }}.

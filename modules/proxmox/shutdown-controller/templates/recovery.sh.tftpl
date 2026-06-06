@@ -20,11 +20,21 @@ MQTT_PUB_BIN="${MQTT_PUB_BIN:-mosquitto_pub}"
 MQTT_PORT="${MQTT_PORT:-1883}"
 MQTT_CLIENT_ID="${MQTT_CLIENT_ID:-$CONTROLLER_NAME-recovery}"
 MQTT_TOPIC_PREFIX="${MQTT_TOPIC_PREFIX:-homelab/$CONTROLLER_NAME}"
+CONTROLLER_VERSION="${CONTROLLER_VERSION:-unknown}"
+MQTT_SCHEMA_VERSION="${MQTT_SCHEMA_VERSION:-7}"
 
 mkdir -p "$STATE_DIR"
 
+current_timestamp() {
+	date -Iseconds
+}
+
+current_epoch() {
+	date +%s
+}
+
 log() {
-	timestamp="$(date -Iseconds)"
+	timestamp="$(current_timestamp)"
 	message="$timestamp shutdown-controller-recovery: $*"
 	echo "$message"
 
@@ -37,6 +47,77 @@ log() {
 		mkdir -p "$log_dir" 2>/dev/null || true
 		printf '%s\n' "$message" >>"$LOG_FILE" 2>/dev/null || true
 	fi
+}
+
+write_state_value() {
+	name="$1"
+	value="$2"
+	printf '%s\n' "$value" >"$STATE_DIR/$name"
+}
+
+read_state_value() {
+	name="$1"
+	default_value="$2"
+	if [ -f "$STATE_DIR/$name" ]; then
+		cat "$STATE_DIR/$name" 2>/dev/null || printf '%s\n' "$default_value"
+	else
+		printf '%s\n' "$default_value"
+	fi
+}
+
+set_controller_phase() {
+	write_state_value "controller.phase" "$1"
+}
+
+set_last_action() {
+	write_state_value "last_action" "$1"
+	write_state_value "last_action_target" "$2"
+	write_state_value "last_action_result" "$3"
+	write_state_value "last_action_at" "$(current_timestamp)"
+}
+
+set_recovery_status() {
+	write_state_value "recovery.status" "$1"
+	write_state_value "recovery.blocker" "$2"
+	write_state_value "recovery.elapsed_seconds" "$3"
+}
+
+clear_incident_state() {
+	write_state_value "incident.id" ""
+	write_state_value "incident.status" "idle"
+	write_state_value "incident.started_at" ""
+	write_state_value "incident.ended_at" ""
+	write_state_value "incident.power_restored_at" ""
+	write_state_value "incident.duration_seconds" "0"
+	write_state_value "incident.trigger_reason" ""
+	write_state_value "incident.trigger_status" ""
+	write_state_value "incident.trigger_runtime" ""
+	write_state_value "incident.trigger_charge" ""
+	set_recovery_status "idle" "" "0"
+}
+
+store_last_completed_summary() {
+	summary_completed_at="$(current_timestamp)"
+	write_state_value "summary.id" "$(read_state_value "incident.id" "")"
+	write_state_value "summary.status" "$(read_state_value "incident.status" "")"
+	write_state_value "summary.started_at" "$(read_state_value "incident.started_at" "")"
+	write_state_value "summary.ended_at" "$(read_state_value "incident.ended_at" "")"
+	write_state_value "summary.power_restored_at" "$(read_state_value "incident.power_restored_at" "")"
+	write_state_value "summary.duration_seconds" "$(read_state_value "incident.duration_seconds" "0")"
+	write_state_value "summary.trigger_reason" "$(read_state_value "incident.trigger_reason" "")"
+	write_state_value "summary.trigger_status" "$(read_state_value "incident.trigger_status" "")"
+	write_state_value "summary.trigger_runtime" "$(read_state_value "incident.trigger_runtime" "")"
+	write_state_value "summary.trigger_charge" "$(read_state_value "incident.trigger_charge" "")"
+	write_state_value "summary.last_action" "$(read_state_value "last_action" "")"
+	write_state_value "summary.last_action_target" "$(read_state_value "last_action_target" "")"
+	write_state_value "summary.last_action_result" "$(read_state_value "last_action_result" "")"
+	write_state_value "summary.last_action_at" "$(read_state_value "last_action_at" "")"
+	write_state_value "summary.last_event" "$(read_state_value "last_event" "")"
+	write_state_value "summary.last_event_at" "$(read_state_value "last_event_at" "")"
+	write_state_value "summary.last_message" "$(read_state_value "last_message" "")"
+	write_state_value "summary.recovery_status" "$(read_state_value "recovery.status" "")"
+	write_state_value "summary.recovery_blocker" "$(read_state_value "recovery.blocker" "")"
+	write_state_value "summary.completed_at" "$summary_completed_at"
 }
 
 require_command() {
@@ -112,7 +193,16 @@ mqtt_publish() {
 mqtt_publish_event() {
 	event_name="$1"
 	message="$2"
-	status="$3"
+	event_status="$3"
+	phase="$4"
+	reason="$5"
+	timestamp="$(current_timestamp)"
+	incident_id="$(read_state_value "incident.id" "")"
+	incident_status="$(read_state_value "incident.status" "idle")"
+
+	write_state_value "last_event" "$event_name"
+	write_state_value "last_message" "$message"
+	write_state_value "last_event_at" "$timestamp"
 
 	if ! command -v "$JQ_BIN" >/dev/null 2>&1; then
 		return 0
@@ -120,19 +210,18 @@ mqtt_publish_event() {
 
 	payload="$($JQ_BIN -nc \
 		--arg controller "$CONTROLLER_NAME" \
+		--arg controller_version "$CONTROLLER_VERSION" \
+		--arg mqtt_schema_version "$MQTT_SCHEMA_VERSION" \
+		--arg timestamp "$timestamp" \
 		--arg event "$event_name" \
 		--arg message "$message" \
-		--arg status "$status" \
-		'{controller:$controller,event:$event,message:$message,status:$status}')"
-	write_state_value "last_event" "$event_name"
-	write_state_value "last_message" "$message"
+		--arg status "$event_status" \
+		--arg phase "$phase" \
+		--arg reason "$reason" \
+		--arg incident_id "$incident_id" \
+		--arg incident_status "$incident_status" \
+		'{controller:$controller,controller_version:$controller_version,mqtt_schema_version:$mqtt_schema_version,timestamp:$timestamp,event:$event,message:$message,status:$status,phase:$phase,reason:$reason,incident_id:$incident_id,incident_status:$incident_status}')"
 	mqtt_publish "event" "$payload" "false"
-}
-
-write_state_value() {
-	name="$1"
-	value="$2"
-	printf '%s\n' "$value" >"$STATE_DIR/$name"
 }
 
 upsc_field() {
@@ -234,39 +323,68 @@ clear_event_state() {
 	rm -f \
 		"$STATE_DIR/ceph_noout.done" \
 		"$STATE_DIR/talos_shutdown.done" \
-		"$STATE_DIR/proxmox_shutdown.done"
+		"$STATE_DIR/linux_shutdown.done" \
+		"$STATE_DIR/proxmox_shutdown.done" \
+		"$STATE_DIR/battery.stage"
+}
+
+finalize_recovered_state() {
+	now="$(current_timestamp)"
+	if [ -z "$(read_state_value "incident.power_restored_at" "")" ]; then
+		write_state_value "incident.power_restored_at" "$now"
+	fi
+	if [ -z "$(read_state_value "incident.ended_at" "")" ]; then
+		write_state_value "incident.ended_at" "$now"
+	fi
+	write_state_value "incident.status" "recovered"
+	set_controller_phase "monitoring"
 }
 
 main() {
 	if [ -z "${CEPH_NAMESPACE:-}" ] || [ -z "${CEPH_TOOLS_DEPLOYMENT:-}" ]; then
-		write_state_value "recovery.status" "skipped"
+		set_recovery_status "skipped" "ceph_not_configured" "0"
+		set_controller_phase "monitoring"
 		log "Ceph recovery is not configured; skipping"
+		mqtt_publish_event "recovery_skipped" "ceph recovery is not configured" "ok" "monitoring" "ceph_not_configured"
 		exit 0
 	fi
 
 	if ! ceph_noout_is_set; then
-		write_state_value "recovery.status" "idle"
-		log "Ceph noout is not set; nothing to recover"
-		mqtt_publish_event "recovery_skipped" "ceph noout is not set" "ok"
+		set_recovery_status "idle" "" "0"
+		finalize_recovered_state
 		clear_event_state
+		log "Ceph noout is not set; nothing to recover"
+		mqtt_publish_event "recovery_skipped" "ceph noout is not set" "ok" "monitoring" "ceph_noout_not_set"
+		store_last_completed_summary
+		clear_incident_state
 		exit 0
 	fi
 
-	start_time="$(date +%s)"
-	write_state_value "recovery.status" "waiting"
+	start_time="$(current_epoch)"
+	write_state_value "incident.status" "recovery_pending"
+	set_controller_phase "recovery_waiting"
+	set_recovery_status "waiting" "starting_checks" "0"
 	log "starting recovery check loop"
-	mqtt_publish_event "recovery_started" "starting recovery check loop" "ok"
+	mqtt_publish_event "recovery_started" "starting recovery check loop" "ok" "recovery_waiting" "recovery_started"
 
 	while true; do
+		now="$(current_epoch)"
+		elapsed="$((now - start_time))"
+		set_recovery_status "waiting" "starting_checks" "$elapsed"
+
 		if [ -n "$NUT_TARGET" ]; then
 			status="$(nut_field ups.status)"
 			if [ -z "$status" ]; then
+				set_controller_phase "recovery_waiting_ups"
+				set_recovery_status "waiting" "ups_status_unavailable" "$elapsed"
 				log "unable to read UPS status during recovery; waiting"
 				sleep "$RECOVERY_CHECK_INTERVAL_SECONDS"
 				continue
 			fi
 
 			if is_on_battery "$status"; then
+				set_controller_phase "recovery_waiting_ups"
+				set_recovery_status "waiting" "ups_on_battery" "$elapsed"
 				log "UPS still on battery with status=$status; waiting before unsetting noout"
 				sleep "$RECOVERY_CHECK_INTERVAL_SECONDS"
 				continue
@@ -274,26 +392,40 @@ main() {
 		fi
 
 		if [ "$RECOVERY_REQUIRE_HEALTH_OK" = "true" ] && ! ceph_is_healthy; then
+			set_controller_phase "recovery_waiting_ceph"
+			set_recovery_status "waiting" "ceph_not_healthy" "$elapsed"
 			log "Ceph is not healthy yet; waiting before unsetting noout"
 			sleep "$RECOVERY_CHECK_INTERVAL_SECONDS"
 		else
+			set_controller_phase "recovery_unsetting_noout"
+			set_recovery_status "waiting" "unsetting_noout" "$elapsed"
 			log "unsetting ceph noout"
 			if ceph_tool osd unset noout; then
 				clear_event_state
-				write_state_value "recovery.status" "complete"
+				set_recovery_status "complete" "" "$elapsed"
+				finalize_recovered_state
+				set_last_action "recovery_complete" "ceph" "ok"
 				log "recovery complete"
-				mqtt_publish_event "recovery_complete" "ceph noout unset" "ok"
+				mqtt_publish_event "recovery_complete" "ceph noout unset" "ok" "monitoring" "ceph_noout_unset"
+				store_last_completed_summary
+				clear_incident_state
 				exit 0
 			fi
+			set_last_action "recovery_complete" "ceph" "failed"
+			set_controller_phase "recovery_waiting_ceph"
+			set_recovery_status "waiting" "unset_noout_failed" "$elapsed"
 			log "failed to unset ceph noout; waiting"
 			sleep "$RECOVERY_CHECK_INTERVAL_SECONDS"
 		fi
 
-		now="$(date +%s)"
+		now="$(current_epoch)"
 		if [ $((now - start_time)) -ge "$RECOVERY_MAX_WAIT_SECONDS" ]; then
-			write_state_value "recovery.status" "timeout"
+			elapsed="$((now - start_time))"
+			write_state_value "incident.status" "timeout"
+			set_controller_phase "recovery_timeout"
+			set_recovery_status "timeout" "manual_review_required" "$elapsed"
 			log "recovery timed out; leaving noout set for manual review"
-			mqtt_publish_event "recovery_timeout" "leaving ceph noout set for manual review" "warning"
+			mqtt_publish_event "recovery_timeout" "leaving ceph noout set for manual review" "warning" "recovery_timeout" "manual_review_required"
 			exit 0
 		fi
 	done

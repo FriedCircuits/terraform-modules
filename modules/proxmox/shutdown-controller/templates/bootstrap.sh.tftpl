@@ -1,7 +1,14 @@
 #!/bin/sh
 set -eu
 
+BOOTSTRAP_LOG_FILE="$${BOOTSTRAP_LOG_FILE:-/var/log/shutdown-controller-bootstrap.log}"
+bootstrap_log_dir="$(dirname "$BOOTSTRAP_LOG_FILE")"
+mkdir -p "$bootstrap_log_dir"
+exec >>"$BOOTSTRAP_LOG_FILE" 2>&1
+
 export DEBIAN_FRONTEND=noninteractive
+
+echo "$(date -Iseconds) shutdown-controller-bootstrap: starting"
 
 apt-get update
 apt-get install -y ${packages}
@@ -56,7 +63,12 @@ chmod 0644 /etc/systemd/system/shutdown-controller-recovery.service
 systemctl daemon-reload
 
 %{ if enable_controller_service ~}
-systemctl enable --now shutdown-controller.service
+systemctl enable shutdown-controller.service >/dev/null 2>&1 || true
+if systemctl is-active --quiet shutdown-controller.service; then
+	systemctl restart shutdown-controller.service
+else
+	systemctl start shutdown-controller.service
+fi
 %{ else ~}
 systemctl disable shutdown-controller.service >/dev/null 2>&1 || true
 %{ endif ~}
@@ -67,3 +79,5 @@ systemctl start shutdown-controller-recovery.service >/dev/null 2>&1 || true
 %{ else ~}
 systemctl disable shutdown-controller-recovery.service >/dev/null 2>&1 || true
 %{ endif ~}
+
+echo "$(date -Iseconds) shutdown-controller-bootstrap: completed"
