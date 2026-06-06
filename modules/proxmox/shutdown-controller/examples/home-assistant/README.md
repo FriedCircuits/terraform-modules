@@ -18,6 +18,7 @@ They assume the module is using the default controller name of `shutdown-control
 - `sensor.shutdown_controller_ups_runtime_formatted`
 - `sensor.shutdown_controller_ups_charge`
 - `sensor.shutdown_controller_controller_version`
+- `sensor.shutdown_controller_mqtt_schema_version`
 - `sensor.shutdown_controller_mode`
 - `sensor.shutdown_controller_phase`
 - `sensor.shutdown_controller_failure_code`

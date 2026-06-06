@@ -298,7 +298,13 @@ variable "talosctl_version" {
 }
 
 variable "controller_version" {
-  description = "Version string exposed by the controller in MQTT state and Home Assistant. Defaults to the repository VERSION file when unset."
+  description = "Version string for the shutdown controller app exposed in MQTT state and Home Assistant. Defaults to the module-local CONTROLLER_VERSION file when unset."
+  type        = string
+  default     = null
+}
+
+variable "mqtt_schema_version" {
+  description = "Version string for the shutdown controller MQTT and Home Assistant state schema. Defaults to the module-local MQTT_SCHEMA_VERSION file when unset."
   type        = string
   default     = null
 }

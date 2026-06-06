@@ -26,7 +26,8 @@ MQTT_RETAIN_STATUS="${MQTT_RETAIN_STATUS:-true}"
 MQTT_DISCOVERY_PREFIX="${MQTT_DISCOVERY_PREFIX:-homeassistant}"
 MQTT_ENABLE_HA_DISCOVERY="${MQTT_ENABLE_HA_DISCOVERY:-true}"
 MQTT_DISCOVERY_REPUBLISH_INTERVAL_SECONDS="${MQTT_DISCOVERY_REPUBLISH_INTERVAL_SECONDS:-300}"
-MQTT_DISCOVERY_SCHEMA_VERSION="${MQTT_DISCOVERY_SCHEMA_VERSION:-7}"
+MQTT_SCHEMA_VERSION="${MQTT_SCHEMA_VERSION:-7}"
+MQTT_DISCOVERY_SCHEMA_VERSION="${MQTT_DISCOVERY_SCHEMA_VERSION:-$MQTT_SCHEMA_VERSION}"
 CONTROLLER_VERSION="${CONTROLLER_VERSION:-unknown}"
 LOG_TO_CONSOLE="${LOG_TO_CONSOLE:-true}"
 CONSOLE_DEVICE="${CONSOLE_DEVICE:-/dev/console}"
@@ -564,6 +565,7 @@ mqtt_publish_event() {
 	payload="$($JQ_BIN -nc \
 		--arg controller "$CONTROLLER_NAME" \
 		--arg controller_version "$CONTROLLER_VERSION" \
+		--arg mqtt_schema_version "$MQTT_SCHEMA_VERSION" \
 		--arg timestamp "$timestamp" \
 		--arg event "$event_name" \
 		--arg message "$message" \
@@ -579,7 +581,7 @@ mqtt_publish_event() {
 		--arg target_name "$target_name" \
 		--arg action_result "$action_result" \
 		--arg error_detail "$error_detail" \
-		'{controller:$controller,controller_version:$controller_version,timestamp:$timestamp,event:$event,message:$message,status:$status,ups_status:$ups_status,runtime:$runtime,charge:$charge,phase:$phase,incident_id:$incident_id,incident_status:$incident_status,reason:$reason,target_type:$target_type,target_name:$target_name,action_result:$action_result,error:$error_detail}')"
+		'{controller:$controller,controller_version:$controller_version,mqtt_schema_version:$mqtt_schema_version,timestamp:$timestamp,event:$event,message:$message,status:$status,ups_status:$ups_status,runtime:$runtime,charge:$charge,phase:$phase,incident_id:$incident_id,incident_status:$incident_status,reason:$reason,target_type:$target_type,target_name:$target_name,action_result:$action_result,error:$error_detail}')"
 	mqtt_publish "event" "$payload" "false"
 }
 
@@ -697,6 +699,7 @@ mqtt_publish_state() {
 	payload="$($JQ_BIN -nc \
 		--arg controller "$CONTROLLER_NAME" \
 		--arg controller_version "$CONTROLLER_VERSION" \
+		--arg mqtt_schema_version "$MQTT_SCHEMA_VERSION" \
 		--arg status "$status" \
 		--arg runtime "$runtime" \
 		--arg runtime_formatted "$runtime_formatted" \
@@ -738,11 +741,12 @@ mqtt_publish_state() {
 		--arg failure_message "$failure_message" \
 		--arg failure_severity "$failure_severity" \
 		--arg failure_at "$failure_at" \
-		'{controller:$controller,controller_version:$controller_version,status:$status,runtime:$runtime,runtime_formatted:$runtime_formatted,charge:$charge,mode:$mode,phase:$phase,ups_connected:($ups_connected == "true"),on_battery:($on_battery == "true"),ceph_noout_set:($ceph_noout_set == "true"),talos_shutdown_started:($talos_shutdown_started == "true"),linux_shutdown_started:($linux_shutdown_started == "true"),proxmox_shutdown_started:($proxmox_shutdown_started == "true"),recovery_status:$recovery_status,recovery_blocker:$recovery_blocker,recovery_elapsed_seconds:$recovery_elapsed_seconds,recovery_elapsed_formatted:$recovery_elapsed_formatted,incident_id:$incident_id,incident_status:$incident_status,incident_active:($incident_active == "true"),recovery_pending:($recovery_pending == "true"),incident_started_at:$incident_started_at,incident_ended_at:$incident_ended_at,incident_power_restored_at:$incident_power_restored_at,incident_duration_seconds:$incident_duration_seconds,incident_duration_formatted:$incident_duration_formatted,incident_trigger_reason:$incident_trigger_reason,incident_trigger_status:$incident_trigger_status,incident_trigger_runtime:$incident_trigger_runtime,incident_trigger_charge:$incident_trigger_charge,last_action:$last_action,last_action_target:$last_action_target,last_action_result:$last_action_result,last_action_at:$last_action_at,last_event:$last_event,last_event_at:$last_event_at,last_message:$last_message,failure_active:($failure_active == "true"),failure_code:$failure_code,failure_message:$failure_message,failure_severity:$failure_severity,failure_at:$failure_at}')"
+		'{controller:$controller,controller_version:$controller_version,mqtt_schema_version:$mqtt_schema_version,status:$status,runtime:$runtime,runtime_formatted:$runtime_formatted,charge:$charge,mode:$mode,phase:$phase,ups_connected:($ups_connected == "true"),on_battery:($on_battery == "true"),ceph_noout_set:($ceph_noout_set == "true"),talos_shutdown_started:($talos_shutdown_started == "true"),linux_shutdown_started:($linux_shutdown_started == "true"),proxmox_shutdown_started:($proxmox_shutdown_started == "true"),recovery_status:$recovery_status,recovery_blocker:$recovery_blocker,recovery_elapsed_seconds:$recovery_elapsed_seconds,recovery_elapsed_formatted:$recovery_elapsed_formatted,incident_id:$incident_id,incident_status:$incident_status,incident_active:($incident_active == "true"),recovery_pending:($recovery_pending == "true"),incident_started_at:$incident_started_at,incident_ended_at:$incident_ended_at,incident_power_restored_at:$incident_power_restored_at,incident_duration_seconds:$incident_duration_seconds,incident_duration_formatted:$incident_duration_formatted,incident_trigger_reason:$incident_trigger_reason,incident_trigger_status:$incident_trigger_status,incident_trigger_runtime:$incident_trigger_runtime,incident_trigger_charge:$incident_trigger_charge,last_action:$last_action,last_action_target:$last_action_target,last_action_result:$last_action_result,last_action_at:$last_action_at,last_event:$last_event,last_event_at:$last_event_at,last_message:$last_message,failure_active:($failure_active == "true"),failure_code:$failure_code,failure_message:$failure_message,failure_severity:$failure_severity,failure_at:$failure_at}')"
 
 	summary_payload="$($JQ_BIN -nc \
 		--arg controller "$CONTROLLER_NAME" \
 		--arg controller_version "$CONTROLLER_VERSION" \
+		--arg mqtt_schema_version "$MQTT_SCHEMA_VERSION" \
 		--arg last_completed_id "$last_completed_id" \
 		--arg last_completed_status "$last_completed_status" \
 		--arg last_completed_started_at "$last_completed_started_at" \
@@ -764,7 +768,7 @@ mqtt_publish_state() {
 		--arg last_completed_recovery_status "$last_completed_recovery_status" \
 		--arg last_completed_recovery_blocker "$last_completed_recovery_blocker" \
 		--arg last_completed_at "$last_completed_at" \
-		'{controller:$controller,controller_version:$controller_version,last_completed_id:$last_completed_id,last_completed_status:$last_completed_status,last_completed_started_at:$last_completed_started_at,last_completed_ended_at:$last_completed_ended_at,last_completed_power_restored_at:$last_completed_power_restored_at,last_completed_duration_seconds:$last_completed_duration_seconds,last_completed_duration_formatted:$last_completed_duration_formatted,last_completed_trigger_reason:$last_completed_trigger_reason,last_completed_trigger_status:$last_completed_trigger_status,last_completed_trigger_runtime:$last_completed_trigger_runtime,last_completed_trigger_charge:$last_completed_trigger_charge,last_completed_last_action:$last_completed_last_action,last_completed_last_action_target:$last_completed_last_action_target,last_completed_last_action_result:$last_completed_last_action_result,last_completed_last_action_at:$last_completed_last_action_at,last_completed_last_event:$last_completed_last_event,last_completed_last_event_at:$last_completed_last_event_at,last_completed_last_message:$last_completed_last_message,last_completed_recovery_status:$last_completed_recovery_status,last_completed_recovery_blocker:$last_completed_recovery_blocker,last_completed_at:$last_completed_at}')"
+		'{controller:$controller,controller_version:$controller_version,mqtt_schema_version:$mqtt_schema_version,last_completed_id:$last_completed_id,last_completed_status:$last_completed_status,last_completed_started_at:$last_completed_started_at,last_completed_ended_at:$last_completed_ended_at,last_completed_power_restored_at:$last_completed_power_restored_at,last_completed_duration_seconds:$last_completed_duration_seconds,last_completed_duration_formatted:$last_completed_duration_formatted,last_completed_trigger_reason:$last_completed_trigger_reason,last_completed_trigger_status:$last_completed_trigger_status,last_completed_trigger_runtime:$last_completed_trigger_runtime,last_completed_trigger_charge:$last_completed_trigger_charge,last_completed_last_action:$last_completed_last_action,last_completed_last_action_target:$last_completed_last_action_target,last_completed_last_action_result:$last_completed_last_action_result,last_completed_last_action_at:$last_completed_last_action_at,last_completed_last_event:$last_completed_last_event,last_completed_last_event_at:$last_completed_last_event_at,last_completed_last_message:$last_completed_last_message,last_completed_recovery_status:$last_completed_recovery_status,last_completed_recovery_blocker:$last_completed_recovery_blocker,last_completed_at:$last_completed_at}')"
 
 	mqtt_publish "state" "$payload" "$MQTT_RETAIN_STATUS"
 	mqtt_publish "status" "$payload" "$MQTT_RETAIN_STATUS"
@@ -813,6 +817,7 @@ publish_homeassistant_discovery() {
 		clear_discovery_config "sensor" "ups_runtime_formatted"
 		clear_discovery_config "sensor" "ups_charge"
 		clear_discovery_config "sensor" "controller_version"
+		clear_discovery_config "sensor" "mqtt_schema_version"
 		clear_discovery_config "sensor" "controller_mode"
 		clear_discovery_config "sensor" "controller_phase"
 		clear_discovery_config "sensor" "failure_code"
@@ -863,6 +868,7 @@ publish_homeassistant_discovery() {
 	publish_discovery_config "sensor" "ups_runtime_formatted" "$($JQ_BIN -nc --arg name "UPS Runtime" --arg object_id "ups_runtime_formatted" --arg default_entity_id "sensor.${device_id}_ups_runtime_formatted" --arg unique_id "${device_id}_ups_runtime_formatted" --arg state_topic "$state_topic" --arg icon "mdi:timer-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.runtime_formatted }}",icon:$icon,device:$device}')"
 	publish_discovery_config "sensor" "ups_charge" "$($JQ_BIN -nc --arg name "UPS Charge" --arg object_id "ups_charge" --arg default_entity_id "sensor.${device_id}_ups_charge" --arg unique_id "${device_id}_ups_charge" --arg state_topic "$state_topic" --arg unit "%" --arg icon "mdi:battery" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.charge | int(0) }}",unit_of_measurement:$unit,icon:$icon,device:$device}')"
 	publish_discovery_config "sensor" "controller_version" "$($JQ_BIN -nc --arg name "Controller Version" --arg object_id "controller_version" --arg default_entity_id "sensor.${device_id}_controller_version" --arg unique_id "${device_id}_controller_version" --arg state_topic "$state_topic" --arg icon "mdi:source-branch" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.controller_version }}",icon:$icon,device:$device}')"
+	publish_discovery_config "sensor" "mqtt_schema_version" "$($JQ_BIN -nc --arg name "MQTT Schema Version" --arg object_id "mqtt_schema_version" --arg default_entity_id "sensor.${device_id}_mqtt_schema_version" --arg unique_id "${device_id}_mqtt_schema_version" --arg state_topic "$state_topic" --arg icon "mdi:shape-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.mqtt_schema_version }}",icon:$icon,device:$device}')"
 	publish_discovery_config "sensor" "controller_mode" "$($JQ_BIN -nc --arg name "Mode" --arg object_id "mode" --arg default_entity_id "sensor.${device_id}_mode" --arg unique_id "${device_id}_controller_mode" --arg state_topic "$state_topic" --arg icon "mdi:transmission-tower" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.mode }}",icon:$icon,device:$device}')"
 	publish_discovery_config "sensor" "controller_phase" "$($JQ_BIN -nc --arg name "Phase" --arg object_id "phase" --arg default_entity_id "sensor.${device_id}_phase" --arg unique_id "${device_id}_controller_phase" --arg state_topic "$state_topic" --arg icon "mdi:timeline-clock-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.phase }}",icon:$icon,device:$device}')"
 	publish_discovery_config "sensor" "failure_code" "$($JQ_BIN -nc --arg name "Failure Code" --arg object_id "failure_code" --arg default_entity_id "sensor.${device_id}_failure_code" --arg unique_id "${device_id}_failure_code" --arg state_topic "$state_topic" --arg icon "mdi:alert-circle-outline" --argjson device "$device_json" '{name:$name,object_id:$object_id,default_entity_id:$default_entity_id,unique_id:$unique_id,state_topic:$state_topic,value_template:"{{ value_json.failure_code }}",icon:$icon,device:$device}')"

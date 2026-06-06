@@ -1,6 +1,7 @@
 locals {
-  container_name     = var.name
-  controller_version = coalesce(var.controller_version, trimspace(file("${path.module}/../../../VERSION")))
+  container_name      = var.name
+  controller_version  = coalesce(var.controller_version, trimspace(file("${path.module}/CONTROLLER_VERSION")))
+  mqtt_schema_version = coalesce(var.mqtt_schema_version, trimspace(file("${path.module}/MQTT_SCHEMA_VERSION")))
   description = coalesce(
     var.description,
     format("Shutdown controller %s", var.name)
@@ -12,6 +13,7 @@ locals {
   controller_env = templatefile("${path.module}/templates/controller.env.tftpl", {
     controller_name                             = var.name
     controller_version                          = local.controller_version
+    mqtt_schema_version                         = local.mqtt_schema_version
     kubeconfig_path                             = "/etc/shutdown-controller/kubeconfig"
     talosconfig_path                            = "/etc/shutdown-controller/talosconfig"
     ceph_namespace                              = coalesce(try(var.ceph.namespace, null), "rook-ceph")

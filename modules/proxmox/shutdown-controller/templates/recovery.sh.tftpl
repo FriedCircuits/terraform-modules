@@ -21,6 +21,7 @@ MQTT_PORT="${MQTT_PORT:-1883}"
 MQTT_CLIENT_ID="${MQTT_CLIENT_ID:-$CONTROLLER_NAME-recovery}"
 MQTT_TOPIC_PREFIX="${MQTT_TOPIC_PREFIX:-homelab/$CONTROLLER_NAME}"
 CONTROLLER_VERSION="${CONTROLLER_VERSION:-unknown}"
+MQTT_SCHEMA_VERSION="${MQTT_SCHEMA_VERSION:-7}"
 
 mkdir -p "$STATE_DIR"
 
@@ -210,6 +211,7 @@ mqtt_publish_event() {
 	payload="$($JQ_BIN -nc \
 		--arg controller "$CONTROLLER_NAME" \
 		--arg controller_version "$CONTROLLER_VERSION" \
+		--arg mqtt_schema_version "$MQTT_SCHEMA_VERSION" \
 		--arg timestamp "$timestamp" \
 		--arg event "$event_name" \
 		--arg message "$message" \
@@ -218,7 +220,7 @@ mqtt_publish_event() {
 		--arg reason "$reason" \
 		--arg incident_id "$incident_id" \
 		--arg incident_status "$incident_status" \
-		'{controller:$controller,controller_version:$controller_version,timestamp:$timestamp,event:$event,message:$message,status:$status,phase:$phase,reason:$reason,incident_id:$incident_id,incident_status:$incident_status}')"
+		'{controller:$controller,controller_version:$controller_version,mqtt_schema_version:$mqtt_schema_version,timestamp:$timestamp,event:$event,message:$message,status:$status,phase:$phase,reason:$reason,incident_id:$incident_id,incident_status:$incident_status}')"
 	mqtt_publish "event" "$payload" "false"
 }
 

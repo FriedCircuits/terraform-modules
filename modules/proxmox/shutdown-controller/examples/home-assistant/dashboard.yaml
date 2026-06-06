@@ -96,6 +96,14 @@ cards:
         hide_state: false
 
       - type: tile
+        entity: sensor.shutdown_controller_mqtt_schema_version
+        name: MQTT Schema
+        icon: mdi:shape-outline
+        color: indigo
+        vertical: false
+        hide_state: false
+
+      - type: tile
         entity: sensor.shutdown_controller_incident_status
         name: Incident
         icon: mdi:alert-decagram-outline

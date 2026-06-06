@@ -124,7 +124,8 @@ module "shutdown_controller" {
 - The retained summary payload keeps the last completed incident record with trigger reason, timestamps, duration, recovery outcome, and last action so short outages can still be explained later from Home Assistant without polluting the live state.
 - MQTT publish failures are logged, but they do not stop the controller or recovery flow.
 - Home Assistant discovery is retried periodically, not just once at startup. This avoids missing discovery when the broker or network is not ready during boot.
-- `controller_version` defaults to the repository `VERSION` file and is exposed in MQTT and Home Assistant. Override it if you need a different release string.
+- `controller_version` defaults to the module-local `CONTROLLER_VERSION` file and is exposed in MQTT and Home Assistant.
+- `mqtt_schema_version` defaults to the module-local `MQTT_SCHEMA_VERSION` file and is exposed in MQTT and Home Assistant so dashboards can tell which payload shape is live.
 - Ceph actions are expected to run through Kubernetes, for example via `kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph ...`.
 - `talos_nodes` entries are passed directly to `talosctl -n`. Hostnames work as long as the controller container can resolve and reach them. IPs avoid a DNS dependency, but only make sense when those node addresses are stable. Use whichever identifier is more reliable in your environment during an outage.
 - `linux_shutdown_targets` are shut down over SSH and default to `sudo systemctl poweroff`. Each target can override `user`, `port`, or `command` individually.
@@ -245,7 +246,8 @@ Home Assistant discovery entities include:
 - UPS runtime seconds
 - UPS runtime (formatted)
 - UPS charge
-- Controller version
+- Controller shell version
+- MQTT schema version
 - Controller mode
 - Controller phase
 - Failure code
