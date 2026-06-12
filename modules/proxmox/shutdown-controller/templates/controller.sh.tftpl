@@ -360,18 +360,6 @@ mqtt_enabled() {
 	[ -n "${MQTT_HOST:-}" ]
 }
 
-mqtt_topic_requires_non_empty_payload() {
-	topic="$1"
-	case "$topic" in
-		"$MQTT_TOPIC_PREFIX/state"|"$MQTT_TOPIC_PREFIX/status"|"$MQTT_TOPIC_PREFIX/summary"|"$MQTT_TOPIC_PREFIX/incident")
-			return 0
-			;;
-		*)
-			return 1
-			;;
-	esac
-}
-
 mqtt_run_publish() {
 	topic="$1"
 	shift
@@ -400,11 +388,6 @@ mqtt_publish() {
 	fi
 
 	if ! command -v "$MQTT_PUB_BIN" >/dev/null 2>&1; then
-		return 0
-	fi
-
-	if [ -z "$payload" ] && mqtt_topic_requires_non_empty_payload "$full_topic"; then
-		log "skipping empty payload publish for $full_topic"
 		return 0
 	fi
 
@@ -440,11 +423,6 @@ mqtt_publish_absolute() {
 	fi
 
 	if ! command -v "$MQTT_PUB_BIN" >/dev/null 2>&1; then
-		return 0
-	fi
-
-	if [ -z "$payload" ] && mqtt_topic_requires_non_empty_payload "$topic"; then
-		log "skipping empty payload publish for $topic"
 		return 0
 	fi
 
