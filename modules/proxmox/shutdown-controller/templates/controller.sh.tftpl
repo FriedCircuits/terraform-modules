@@ -608,92 +608,6 @@ mqtt_publish_event() {
 	mqtt_publish "event" "$payload" "false"
 }
 
-derive_controller_state() {
-	ups_connected="$1"
-	on_battery="$2"
-	incident_status="$3"
-	recovery_status="$4"
-	phase="$5"
-
-	if [ "$ups_connected" != "true" ]; then
-		printf '%s\n' "unknown"
-		return 0
-	fi
-
-	if [ "$incident_status" = "timeout" ] || [ "$recovery_status" = "timeout" ]; then
-		printf '%s\n' "recovery_timeout"
-		return 0
-	fi
-
-	case "$phase" in
-		ceph_noout|talos_shutdown|linux_shutdown|proxmox_shutdown|on_battery|power_restored_recovery_pending|recovery_timeout)
-			printf '%s\n' "$phase"
-			return 0
-			;;
-	esac
-
-	if [ "$incident_status" = "active" ] || [ "$on_battery" = "true" ]; then
-		printf '%s\n' "on_battery"
-		return 0
-	fi
-
-	if [ "$incident_status" = "recovery_pending" ] || [ "$recovery_status" = "waiting" ] || [ "$recovery_status" = "pending_boot" ]; then
-		printf '%s\n' "recovery"
-		return 0
-	fi
-
-	printf '%s\n' "healthy"
-}
-
-derive_controller_summary() {
-	controller_state="$1"
-	incident_status="$2"
-	recovery_status="$3"
-	ups_connected="$4"
-
-	if [ "$ups_connected" != "true" ]; then
-		printf '%s\n' "UPS status unavailable"
-		return 0
-	fi
-
-	case "$controller_state" in
-		healthy)
-			if [ "$incident_status" = "idle" ] && [ "$recovery_status" = "idle" ]; then
-				printf '%s\n' "Utility power normal"
-			else
-				printf '%s\n' "No active event"
-			fi
-			;;
-		on_battery)
-			printf '%s\n' "On battery"
-			;;
-		ceph_noout)
-			printf '%s\n' "Ceph noout set"
-			;;
-		talos_shutdown)
-			printf '%s\n' "Talos shutdown started"
-			;;
-		linux_shutdown)
-			printf '%s\n' "Linux shutdown started"
-			;;
-		proxmox_shutdown)
-			printf '%s\n' "Proxmox shutdown started"
-			;;
-		power_restored_recovery_pending|recovery)
-			printf '%s\n' "Recovery in progress"
-			;;
-		recovery_timeout)
-			printf '%s\n' "Recovery timed out"
-			;;
-		unknown)
-			printf '%s\n' "Unknown"
-			;;
-		*)
-			printf '%s\n' "No active event"
-			;;
-	esac
-}
-
 mqtt_publish_state() {
 	status="$1"
 	runtime="$2"
@@ -752,8 +666,6 @@ mqtt_publish_state() {
 	last_completed_recovery_status="$(read_state_value "summary.recovery_status" "")"
 	last_completed_recovery_blocker="$(read_state_value "summary.recovery_blocker" "")"
 	last_completed_at="$(read_state_value "summary.completed_at" "")"
-	controller_state="$(derive_controller_state "$ups_connected" "$on_battery" "$incident_status" "$recovery_status" "$phase")"
-	controller_summary="$(derive_controller_summary "$controller_state" "$incident_status" "$recovery_status" "$ups_connected")"
 	ceph_noout_set="$(marker_bool "ceph_noout")"
 	talos_shutdown_started="$(marker_bool "talos_shutdown")"
 	linux_shutdown_started="$(marker_bool "linux_shutdown")"
@@ -881,9 +793,9 @@ mqtt_publish_state() {
 		--arg last_completed_at "$last_completed_at" \
 		'{controller:$controller,controller_version:$controller_version,mqtt_schema_version:$mqtt_schema_version,last_completed_id:$last_completed_id,last_completed_status:$last_completed_status,last_completed_started_at:$last_completed_started_at,last_completed_ended_at:$last_completed_ended_at,last_completed_power_restored_at:$last_completed_power_restored_at,last_completed_duration_seconds:$last_completed_duration_seconds,last_completed_duration_formatted:$last_completed_duration_formatted,last_completed_trigger_reason:$last_completed_trigger_reason,last_completed_trigger_status:$last_completed_trigger_status,last_completed_trigger_runtime:$last_completed_trigger_runtime,last_completed_trigger_charge:$last_completed_trigger_charge,last_completed_last_action:$last_completed_last_action,last_completed_last_action_target:$last_completed_last_action_target,last_completed_last_action_result:$last_completed_last_action_result,last_completed_last_action_at:$last_completed_last_action_at,last_completed_last_event:$last_completed_last_event,last_completed_last_event_at:$last_completed_last_event_at,last_completed_last_message:$last_completed_last_message,last_completed_recovery_status:$last_completed_recovery_status,last_completed_recovery_blocker:$last_completed_recovery_blocker,last_completed_at:$last_completed_at}')"
 
-	mqtt_publish "state" "$controller_state" "$MQTT_RETAIN_STATUS"
-	mqtt_publish "summary" "$controller_summary" "true"
+	mqtt_publish "state" "$payload" "$MQTT_RETAIN_STATUS"
 	mqtt_publish "status" "$payload" "$MQTT_RETAIN_STATUS"
+	mqtt_publish "summary" "$summary_payload" "true"
 	mqtt_publish "incident" "$summary_payload" "true"
 }
 
@@ -897,8 +809,8 @@ publish_homeassistant_discovery() {
 	fi
 
 	device_id="$(controller_device_id)"
-	state_topic="$MQTT_TOPIC_PREFIX/status"
-	summary_topic="$MQTT_TOPIC_PREFIX/incident"
+	state_topic="$MQTT_TOPIC_PREFIX/state"
+	summary_topic="$MQTT_TOPIC_PREFIX/summary"
 	log "publishing Home Assistant discovery to $MQTT_DISCOVERY_PREFIX for $MQTT_TOPIC_PREFIX"
 	device_json="$($JQ_BIN -nc \
 		--arg identifier "$CONTROLLER_NAME" \
