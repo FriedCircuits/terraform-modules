@@ -315,6 +315,18 @@ mqtt_enabled() {
 	[ -n "${MQTT_HOST:-}" ]
 }
 
+mqtt_topic_requires_non_empty_payload() {
+	topic="$1"
+	case "$topic" in
+		"$MQTT_TOPIC_PREFIX/state"|"$MQTT_TOPIC_PREFIX/status"|"$MQTT_TOPIC_PREFIX/summary"|"$MQTT_TOPIC_PREFIX/incident")
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
 mqtt_run_publish() {
 	topic="$1"
 	shift
@@ -336,6 +348,7 @@ mqtt_publish() {
 	topic_suffix="$1"
 	payload="$2"
 	retain="${3:-false}"
+	full_topic="$MQTT_TOPIC_PREFIX/$topic_suffix"
 
 	if ! mqtt_enabled; then
 		return 0
@@ -345,10 +358,15 @@ mqtt_publish() {
 		return 0
 	fi
 
+	if [ -z "$payload" ] && mqtt_topic_requires_non_empty_payload "$full_topic"; then
+		log "skipping empty payload publish for $full_topic"
+		return 0
+	fi
+
 	set -- "$MQTT_PUB_BIN" \
 		-h "$MQTT_HOST" \
 		-p "$MQTT_PORT" \
-		-t "$MQTT_TOPIC_PREFIX/$topic_suffix" \
+		-t "$full_topic" \
 		-i "$MQTT_CLIENT_ID" \
 		-m "$payload"
 
@@ -364,7 +382,7 @@ mqtt_publish() {
 		set -- "$@" -P "$MQTT_PASSWORD"
 	fi
 
-	mqtt_run_publish "$MQTT_TOPIC_PREFIX/$topic_suffix" "$@"
+	mqtt_run_publish "$full_topic" "$@"
 }
 
 mqtt_publish_absolute() {
@@ -377,6 +395,11 @@ mqtt_publish_absolute() {
 	fi
 
 	if ! command -v "$MQTT_PUB_BIN" >/dev/null 2>&1; then
+		return 0
+	fi
+
+	if [ -z "$payload" ] && mqtt_topic_requires_non_empty_payload "$topic"; then
+		log "skipping empty payload publish for $topic"
 		return 0
 	fi
 
