@@ -62,6 +62,10 @@ chmod 0644 /etc/systemd/system/shutdown-controller-recovery.service
 
 systemctl daemon-reload
 
+# Clean up any orphan/manual controller processes so only the managed systemd unit publishes MQTT.
+pkill -f '^/usr/local/sbin/shutdown-controller( |$)' >/dev/null 2>&1 || true
+pkill -f '^/usr/local/sbin/shutdown-controller-recovery( |$)' >/dev/null 2>&1 || true
+
 %{ if enable_controller_service ~}
 systemctl enable shutdown-controller.service >/dev/null 2>&1 || true
 if systemctl is-active --quiet shutdown-controller.service; then
