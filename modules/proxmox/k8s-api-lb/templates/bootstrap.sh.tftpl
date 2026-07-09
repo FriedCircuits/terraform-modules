@@ -23,7 +23,7 @@ package_installed() {
   dpkg-query -W -f='$${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'
 }
 
-if ! package_installed haproxy || ! package_installed keepalived; then
+if ! package_installed haproxy || ! package_installed keepalived || ! package_installed curl; then
   if [ ! -e "$${policy_rc_d_path}" ]; then
     cat <<'POLICY_RC_D_EOF' >"$${policy_rc_d_path}"
 #!/bin/sh
@@ -34,10 +34,10 @@ POLICY_RC_D_EOF
   fi
 
   apt-get update
-  apt-get install -y --no-install-recommends haproxy keepalived
+  apt-get install -y --no-install-recommends haproxy keepalived curl
 fi
 
-install -d -m 0755 /etc/haproxy /etc/keepalived
+install -d -m 0755 /etc/haproxy /etc/keepalived /usr/local/sbin
 
 cat <<'HAPROXY_EOF' >/etc/haproxy/haproxy.cfg
 ${haproxy_config}
@@ -46,6 +46,25 @@ HAPROXY_EOF
 cat <<'KEEPALIVED_EOF' >/etc/keepalived/keepalived.conf
 ${keepalived_config}
 KEEPALIVED_EOF
+
+cat <<'HEALTH_CHECK_EOF' >/usr/local/sbin/k8s-api-lb-health-check.sh
+#!/bin/sh
+set -eu
+
+url="https://127.0.0.1:${frontend_port}/readyz"
+attempt=1
+
+while [ "$attempt" -le 3 ]; do
+  if /usr/bin/curl -k -sS --connect-timeout 1 --max-time 3 -o /dev/null "$url"; then
+    exit 0
+  fi
+
+  attempt=$((attempt + 1))
+  sleep 1
+done
+
+exit 1
+HEALTH_CHECK_EOF
 
 cat <<'HAPROXY_UNIT_EOF' >"/etc/systemd/system/$${haproxy_unit}"
 [Unit]
@@ -65,6 +84,7 @@ WantedBy=multi-user.target
 HAPROXY_UNIT_EOF
 
 chmod 0644 /etc/haproxy/haproxy.cfg /etc/keepalived/keepalived.conf "/etc/systemd/system/$${haproxy_unit}"
+chmod 0755 /usr/local/sbin/k8s-api-lb-health-check.sh
 
 systemctl daemon-reload
 systemctl reset-failed ${haproxy_service} ${keepalived_service} || true
