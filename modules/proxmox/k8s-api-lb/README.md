@@ -13,6 +13,7 @@ Internally it composes the sibling `../lxc` module so the base Proxmox LXC behav
 - Renders HAProxy and Keepalived configuration from Terraform templates.
 - Bootstraps packages and configuration through a Proxmox hook script.
 - Installs a container-safe HAProxy systemd unit so the service starts reliably inside LXC.
+- Tracks local HAProxy API readiness from Keepalived so the VIP fails over when HAProxy cannot serve the Kubernetes API.
 - Can optionally expose the Talos API on the same VIP through HAProxy port `50000`.
 
 ## Example
@@ -99,6 +100,7 @@ module "k8s_api_lb" {
 - Proxmox API TLS verification is enabled by default. Set `pve_connection.tls_insecure = true` only if your environment requires it.
 - When `container_template.file_id` is not supplied, the module downloads the template to each Proxmox node referenced by `instances`.
 - The first container boot is handled by a Proxmox hook script. Package auto-start is explicitly suppressed during bootstrap so the packaged HAProxy unit does not race the container-safe replacement unit.
+- Keepalived tracks `https://127.0.0.1:<haproxy_frontend_port>/readyz` through the local HAProxy frontend instead of only checking that the HAProxy process is running. HTTP responses such as Kubernetes' unauthenticated `401` count as healthy because they prove HAProxy reached an API backend.
 - This module owns the `proxmox` provider configuration so it can safely iterate the child `lxc` module with `for_each`. Keep that provider configuration at this level or above when calling it from Terragrunt.
 
 ## Inputs

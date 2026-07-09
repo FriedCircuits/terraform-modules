@@ -95,6 +95,7 @@ locals {
     for key, inst in local.instances : key => templatefile("${path.module}/templates/bootstrap.sh.tftpl", {
       haproxy_service    = var.haproxy_service_name
       keepalived_service = var.keepalived_service_name
+      frontend_port      = var.haproxy_frontend_port
       haproxy_config     = local.haproxy_configs[key]
       keepalived_config  = local.keepalived_configs[key]
     })

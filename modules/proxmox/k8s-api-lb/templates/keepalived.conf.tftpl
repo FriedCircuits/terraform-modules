@@ -4,7 +4,7 @@ global_defs {
 }
 
 vrrp_script chk_haproxy {
-    script "/usr/bin/systemctl is-active --quiet ${haproxy_service}"
+    script "/usr/local/sbin/k8s-api-lb-health-check.sh"
     user root
     interval 2
     fall 2
