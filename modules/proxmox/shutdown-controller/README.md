@@ -23,6 +23,7 @@ The default controller stages shutdown actions based on the reported UPS runtime
 - shut down Talos nodes
 - shut down generic Linux nodes over SSH
 - shut down selected Proxmox nodes
+- after line power returns, optionally power recovery targets back on and wait for Kubernetes nodes before unsetting Ceph `noout`
 
 Use `controller_script` only when you need to replace that built-in flow.
 
@@ -132,7 +133,7 @@ module "shutdown_controller" {
 - `linux_shutdown_ssh` injects the SSH private key and optional known_hosts data used for generic Linux shutdown targets. `strict_host_key_checking` defaults to `accept-new`; use `yes` when you want to pin host keys explicitly.
 - The built-in controller stages Ceph `noout`, Talos shutdown, generic Linux shutdown, and Proxmox shutdown based on runtime thresholds. Override `controller_script` only when you need different behavior.
 - `LINUX_SHUTDOWN_MIN_RUNTIME_SECONDS` lets you place generic Linux shutdown before or after Talos and Proxmox actions depending on what you want to keep alive longest during an outage.
-- The module also installs a one-shot `shutdown-controller-recovery.service` by default. It runs on LXC boot, waits for line power and healthy Ceph, then unsets `noout` safely.
+- The module also installs a one-shot `shutdown-controller-recovery.service` by default. It runs on LXC boot or when line power is restored after an outage, optionally powers recovery targets back on, waits for selected Kubernetes nodes, waits for healthy Ceph, then unsets `noout` safely.
 - Omit `pve_api` entirely if the controller does not need to make Proxmox API calls from inside the container.
 - This module owns the `proxmox` provider configuration so it can safely compose the child `lxc` module. Keep that provider configuration at this level or above when calling it from Terragrunt.
 
@@ -167,14 +168,16 @@ Useful verification points:
 Recovery is intentionally separate from the long-running UPS poller.
 
 - `shutdown-controller.service` handles outage detection and staged shutdown actions.
-- `shutdown-controller-recovery.service` handles post-boot recovery and `ceph osd unset noout`.
+- `shutdown-controller-recovery.service` handles post-boot or post-line-power recovery and `ceph osd unset noout`.
 
 This keeps recovery as a one-time post-boot action instead of trying to fold it into the outage loop.
 
 The recovery service will only unset `noout` when all of these are true:
 
-- the LXC has booted and the one-shot recovery service is running
+- the LXC has booted, or the UPS poller started the one-shot recovery service after line power returned
 - the UPS is no longer on battery, when NUT is configured
+- configured IPMI and Turing Pi recovery power-on requests have completed
+- configured Kubernetes nodes are Ready
 - Ceph access through the toolbox is working
 - Ceph reports `HEALTH_OK`, by default
 
@@ -183,6 +186,12 @@ Relevant environment knobs:
 - `RECOVERY_CHECK_INTERVAL_SECONDS`: how often the recovery service retries checks, default `30`
 - `RECOVERY_MAX_WAIT_SECONDS`: how long the recovery service waits before giving up and leaving `noout` set, default `1800`
 - `RECOVERY_REQUIRE_HEALTH_OK`: whether to require `HEALTH_OK` before unsetting `noout`, default `true`
+- `RECOVERY_IPMI_TARGETS_B64`: base64-encoded JSON array of IPMI targets with `name` and `host`; each target receives `ipmitool ... chassis power on`
+- `RECOVERY_IPMI_USERNAME` and `RECOVERY_IPMI_PASSWORD`: credentials used for IPMI power-on targets
+- `RECOVERY_TURINGPI_HOST`: SSH host for the Turing Pi BMC/backplane
+- `RECOVERY_TURINGPI_TARGETS_B64`: base64-encoded JSON array of Turing Pi targets with `name` and `slot`; each target powers on that slot through `tpi power` over SSH to the backplane
+- `RECOVERY_TURINGPI_USERNAME` and `RECOVERY_TURINGPI_PASSWORD`: SSH and `tpi` credentials used for Turing Pi recovery power-on
+- `RECOVERY_K8S_NODE_WAIT_TARGETS`: comma-separated Kubernetes node names that must become Ready before Ceph `noout` is unset
 - `MQTT_DISCOVERY_REPUBLISH_INTERVAL_SECONDS`: how often retained Home Assistant discovery configs are re-published when discovery is enabled, default `300`; set `0` to disable periodic re-publish after the initial attempt
 
 ## Sensitive Inputs
@@ -242,6 +251,9 @@ Home Assistant discovery entities include:
 - On battery
 - Incident active
 - Failure active
+- Recovery pending
+- Recovery power on done
+- Recovery Kubernetes ready
 - UPS status
 - UPS runtime seconds
 - UPS runtime (formatted)
@@ -264,6 +276,12 @@ Home Assistant discovery entities include:
 - Recovery blocker
 - Recovery elapsed seconds
 - Recovery elapsed (formatted)
+- Recovery power targets total
+- Recovery power targets failed
+- Recovery last power target
+- Recovery last power method
+- Recovery Kubernetes wait nodes total
+- Recovery Kubernetes not-ready nodes
 - Last event
 - Last message
 - Last action
