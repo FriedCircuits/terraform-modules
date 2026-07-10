@@ -9,6 +9,8 @@ They assume the module is using the default controller name of `shutdown-control
 - `binary_sensor.shutdown_controller_incident_active`
 - `binary_sensor.shutdown_controller_failure_active`
 - `binary_sensor.shutdown_controller_recovery_pending`
+- `binary_sensor.shutdown_controller_recovery_power_on_done`
+- `binary_sensor.shutdown_controller_recovery_k8s_ready`
 - `binary_sensor.shutdown_controller_ceph_noout_set`
 - `binary_sensor.shutdown_controller_talos_shutdown_started`
 - `binary_sensor.shutdown_controller_linux_shutdown_started`
@@ -38,6 +40,12 @@ They assume the module is using the default controller name of `shutdown-control
 - `sensor.shutdown_controller_recovery_blocker`
 - `sensor.shutdown_controller_recovery_elapsed_seconds`
 - `sensor.shutdown_controller_recovery_elapsed_formatted`
+- `sensor.shutdown_controller_recovery_power_targets_total`
+- `sensor.shutdown_controller_recovery_power_targets_failed`
+- `sensor.shutdown_controller_recovery_power_targets_last`
+- `sensor.shutdown_controller_recovery_power_targets_last_method`
+- `sensor.shutdown_controller_recovery_k8s_wait_nodes_total`
+- `sensor.shutdown_controller_recovery_k8s_not_ready_nodes`
 - `sensor.shutdown_controller_last_event`
 - `sensor.shutdown_controller_last_event_at`
 - `sensor.shutdown_controller_last_message`

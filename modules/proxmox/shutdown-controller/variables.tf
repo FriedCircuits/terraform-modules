@@ -234,10 +234,12 @@ variable "packages" {
     "ca-certificates",
     "curl",
     "jq",
+    "ipmitool",
     "mosquitto-clients",
     "nut-client",
     "python3",
     "openssh-client",
+    "sshpass",
   ]
 }
 

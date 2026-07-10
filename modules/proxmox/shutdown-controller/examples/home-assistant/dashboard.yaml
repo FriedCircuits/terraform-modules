@@ -25,6 +25,10 @@ cards:
 
       Recovery elapsed: **{{ states('sensor.shutdown_controller_recovery_elapsed_formatted') }}**
 
+      Power targets failed: **{{ states('sensor.shutdown_controller_recovery_power_targets_failed') or 'none' }}**
+
+      K8s nodes not ready: **{{ states('sensor.shutdown_controller_recovery_k8s_not_ready_nodes') or 'none' }}**
+
       Last message: **{{ states('sensor.shutdown_controller_last_message') or 'none' }}**
       {% elif is_state('binary_sensor.shutdown_controller_ups_connected', 'off') %}
       ## UPS Connectivity Lost
@@ -232,6 +236,78 @@ cards:
         hide_state: false
 
   - type: heading
+    heading: Recovery Details
+    icon: mdi:restore-alert
+
+  - type: grid
+    columns: 2
+    square: false
+    cards:
+      - type: tile
+        entity: binary_sensor.shutdown_controller_recovery_power_on_done
+        name: Power On Done
+        icon: mdi:power-plug-outline
+        color: green
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: binary_sensor.shutdown_controller_recovery_k8s_ready
+        name: K8s Ready
+        icon: mdi:kubernetes
+        color: green
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_recovery_power_targets_total
+        name: Power Targets
+        icon: mdi:counter
+        color: blue
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_recovery_power_targets_failed
+        name: Failed Power Targets
+        icon: mdi:server-network-off
+        color: red
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_recovery_power_targets_last
+        name: Last Power Target
+        icon: mdi:server-network
+        color: cyan
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_recovery_power_targets_last_method
+        name: Last Power Method
+        icon: mdi:connection
+        color: cyan
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_recovery_k8s_wait_nodes_total
+        name: K8s Wait Nodes
+        icon: mdi:kubernetes
+        color: purple
+        vertical: false
+        hide_state: false
+
+      - type: tile
+        entity: sensor.shutdown_controller_recovery_k8s_not_ready_nodes
+        name: K8s Not Ready
+        icon: mdi:kubernetes
+        color: amber
+        vertical: false
+        hide_state: false
+
+  - type: heading
     heading: Current Incident
     icon: mdi:alarm-light-outline
 
@@ -419,6 +495,8 @@ cards:
       - entity: binary_sensor.shutdown_controller_on_battery
       - entity: binary_sensor.shutdown_controller_incident_active
       - entity: binary_sensor.shutdown_controller_recovery_pending
+      - entity: binary_sensor.shutdown_controller_recovery_power_on_done
+      - entity: binary_sensor.shutdown_controller_recovery_k8s_ready
       - entity: binary_sensor.shutdown_controller_ceph_noout_set
       - entity: binary_sensor.shutdown_controller_talos_shutdown_started
       - entity: binary_sensor.shutdown_controller_linux_shutdown_started

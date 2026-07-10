@@ -7,6 +7,9 @@ STATE_DIR="/run/shutdown-controller"
 KUBECTL_BIN="${KUBECTL_BIN:-/usr/local/bin/kubectl}"
 UPSC_BIN="${UPSC_BIN:-upsc}"
 JQ_BIN="${JQ_BIN:-jq}"
+IPMITOOL_BIN="${IPMITOOL_BIN:-ipmitool}"
+SSHPASS_BIN="${SSHPASS_BIN:-sshpass}"
+SSH_BIN="${SSH_BIN:-ssh}"
 LOG_TO_CONSOLE="${LOG_TO_CONSOLE:-true}"
 CONSOLE_DEVICE="${CONSOLE_DEVICE:-/dev/console}"
 LOG_TO_FILE="${LOG_TO_FILE:-true}"
@@ -14,6 +17,14 @@ LOG_FILE="${LOG_FILE:-/var/log/shutdown-controller.log}"
 RECOVERY_CHECK_INTERVAL_SECONDS="${RECOVERY_CHECK_INTERVAL_SECONDS:-30}"
 RECOVERY_MAX_WAIT_SECONDS="${RECOVERY_MAX_WAIT_SECONDS:-1800}"
 RECOVERY_REQUIRE_HEALTH_OK="${RECOVERY_REQUIRE_HEALTH_OK:-true}"
+RECOVERY_IPMI_TARGETS_B64="${RECOVERY_IPMI_TARGETS_B64:-}"
+RECOVERY_IPMI_USERNAME="${RECOVERY_IPMI_USERNAME:-${RECOVERY_DELL_IPMI_USERNAME:-}}"
+RECOVERY_IPMI_PASSWORD="${RECOVERY_IPMI_PASSWORD:-${RECOVERY_DELL_IPMI_PASSWORD:-}}"
+RECOVERY_TURINGPI_TARGETS_B64="${RECOVERY_TURINGPI_TARGETS_B64:-}"
+RECOVERY_TURINGPI_HOST="${RECOVERY_TURINGPI_HOST:-}"
+RECOVERY_TURINGPI_SSH_PORT="${RECOVERY_TURINGPI_SSH_PORT:-22}"
+RECOVERY_TURINGPI_SSH_STRICT_HOST_KEY_CHECKING="${RECOVERY_TURINGPI_SSH_STRICT_HOST_KEY_CHECKING:-accept-new}"
+RECOVERY_K8S_NODE_WAIT_TARGETS="${RECOVERY_K8S_NODE_WAIT_TARGETS:-}"
 NUT_TARGET="${NUT_TARGET:-}"
 CONTROLLER_NAME="${CONTROLLER_NAME:-shutdown-controller}"
 MQTT_PUB_BIN="${MQTT_PUB_BIN:-mosquitto_pub}"
@@ -82,6 +93,28 @@ set_recovery_status() {
 	write_state_value "recovery.elapsed_seconds" "$3"
 }
 
+reset_recovery_detail_state() {
+	write_state_value "recovery.power_on.done" "false"
+	write_state_value "recovery.power_targets.total" "0"
+	write_state_value "recovery.power_targets.failed" ""
+	write_state_value "recovery.power_targets.last" ""
+	write_state_value "recovery.power_targets.last_method" ""
+	write_state_value "recovery.k8s_wait_nodes.total" "0"
+	write_state_value "recovery.k8s_not_ready_nodes" ""
+	write_state_value "recovery.k8s_ready" "false"
+}
+
+append_csv_state_value() {
+	name="$1"
+	value="$2"
+	current_value="$(read_state_value "$name" "")"
+	if [ -z "$current_value" ]; then
+		write_state_value "$name" "$value"
+	else
+		write_state_value "$name" "$current_value,$value"
+	fi
+}
+
 clear_incident_state() {
 	write_state_value "incident.id" ""
 	write_state_value "incident.status" "idle"
@@ -94,6 +127,7 @@ clear_incident_state() {
 	write_state_value "incident.trigger_runtime" ""
 	write_state_value "incident.trigger_charge" ""
 	set_recovery_status "idle" "" "0"
+	reset_recovery_detail_state
 }
 
 store_last_completed_summary() {
@@ -132,6 +166,14 @@ require_executable() {
 		log "missing required executable: $1"
 		exit 0
 	fi
+}
+
+command_available() {
+	command -v "$1" >/dev/null 2>&1 || [ -x "$1" ]
+}
+
+shell_quote() {
+	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
 mqtt_enabled() {
@@ -325,6 +367,7 @@ clear_event_state() {
 		"$STATE_DIR/talos_shutdown.done" \
 		"$STATE_DIR/linux_shutdown.done" \
 		"$STATE_DIR/proxmox_shutdown.done" \
+		"$STATE_DIR/recovery_power_on.done" \
 		"$STATE_DIR/battery.stage"
 }
 
@@ -338,6 +381,168 @@ finalize_recovered_state() {
 	fi
 	write_state_value "incident.status" "recovered"
 	set_controller_phase "monitoring"
+}
+
+json_array_from_b64() {
+	value="$1"
+	if [ -z "$value" ]; then
+		printf '%s\n' '[]'
+		return 0
+	fi
+	if ! decoded="$(printf '%s' "$value" | base64 -d 2>/dev/null)"; then
+		printf '%s\n' '[]'
+		return 0
+	fi
+	printf '%s' "$decoded" | "$JQ_BIN" -c 'if type == "array" then . else [] end' 2>/dev/null || printf '%s\n' '[]'
+}
+
+json_array_count_from_b64() {
+	json_array_from_b64 "$1" | "$JQ_BIN" -r 'length' 2>/dev/null || printf '%s\n' "0"
+}
+
+power_on_ipmi_targets() {
+	if ! command_available "$JQ_BIN"; then
+		log "IPMI recovery targets configured but jq is missing: $JQ_BIN"
+		return 1
+	fi
+	targets_json="$(json_array_from_b64 "$RECOVERY_IPMI_TARGETS_B64")"
+	if [ "$targets_json" = '[]' ]; then
+		return 0
+	fi
+	if [ -z "$RECOVERY_IPMI_USERNAME" ] || [ -z "$RECOVERY_IPMI_PASSWORD" ]; then
+		log "IPMI recovery targets configured but credentials are missing"
+		return 1
+	fi
+	if ! command_available "$IPMITOOL_BIN"; then
+		log "IPMI recovery targets configured but ipmitool is missing: $IPMITOOL_BIN"
+		return 1
+	fi
+
+	rm -f "$STATE_DIR/recovery_ipmi_failed"
+	printf '%s' "$targets_json" | "$JQ_BIN" -cr '.[] | @base64' | while IFS= read -r target_b64; do
+		target_json="$(printf '%s' "$target_b64" | base64 -d)"
+		name="$(printf '%s' "$target_json" | "$JQ_BIN" -r '.name // .host')"
+		host="$(printf '%s' "$target_json" | "$JQ_BIN" -r '.host')"
+		write_state_value "recovery.power_targets.last" "$name"
+		write_state_value "recovery.power_targets.last_method" "ipmi"
+		log "powering on IPMI target $name at $host"
+		if "$IPMITOOL_BIN" -I lanplus -H "$host" -U "$RECOVERY_IPMI_USERNAME" -P "$RECOVERY_IPMI_PASSWORD" chassis power on >/dev/null; then
+			mqtt_publish_event "recovery_ipmi_power_on" "IPMI power on requested for $name" "ok" "recovery_powering_on" "ipmi_power_on"
+		else
+			log "failed to power on IPMI target $name at $host"
+			mqtt_publish_event "recovery_ipmi_power_on_failed" "Failed to power on IPMI target $name" "warning" "recovery_powering_on" "ipmi_power_on_failed"
+			append_csv_state_value "recovery.power_targets.failed" "$name"
+			: >"$STATE_DIR/recovery_ipmi_failed"
+		fi
+	done
+
+	[ ! -f "$STATE_DIR/recovery_ipmi_failed" ]
+}
+
+power_on_turingpi_targets() {
+	if ! command_available "$JQ_BIN"; then
+		log "Turing Pi recovery targets configured but jq is missing: $JQ_BIN"
+		return 1
+	fi
+	targets_json="$(json_array_from_b64 "$RECOVERY_TURINGPI_TARGETS_B64")"
+	if [ "$targets_json" = '[]' ]; then
+		return 0
+	fi
+	if [ -z "$RECOVERY_TURINGPI_HOST" ] || [ -z "${RECOVERY_TURINGPI_USERNAME:-}" ] || [ -z "${RECOVERY_TURINGPI_PASSWORD:-}" ]; then
+		log "Turing Pi recovery targets configured but host or credentials are missing"
+		return 1
+	fi
+	if ! command_available "$SSHPASS_BIN"; then
+		log "Turing Pi recovery targets configured but sshpass is missing: $SSHPASS_BIN"
+		return 1
+	fi
+	if ! command_available "$SSH_BIN"; then
+		log "Turing Pi recovery targets configured but ssh is missing: $SSH_BIN"
+		return 1
+	fi
+
+	rm -f "$STATE_DIR/recovery_turingpi_failed"
+	printf '%s' "$targets_json" | "$JQ_BIN" -cr '.[] | @base64' | while IFS= read -r target_b64; do
+		target_json="$(printf '%s' "$target_b64" | base64 -d)"
+		name="$(printf '%s' "$target_json" | "$JQ_BIN" -r '.name // ("slot-" + (.slot|tostring))')"
+		slot="$(printf '%s' "$target_json" | "$JQ_BIN" -r '.slot')"
+		turingpi_user_arg="$(shell_quote "$RECOVERY_TURINGPI_USERNAME")"
+		turingpi_password_arg="$(shell_quote "$RECOVERY_TURINGPI_PASSWORD")"
+		remote_command="command -v tpi >/dev/null 2>&1 && tpi power -n $slot on --user $turingpi_user_arg --password $turingpi_password_arg"
+		write_state_value "recovery.power_targets.last" "$name"
+		write_state_value "recovery.power_targets.last_method" "turingpi"
+		log "powering on Turing Pi target $name slot=$slot via $RECOVERY_TURINGPI_HOST"
+		if "$SSHPASS_BIN" -p "$RECOVERY_TURINGPI_PASSWORD" "$SSH_BIN" \
+			-o BatchMode=no \
+			-o StrictHostKeyChecking="$RECOVERY_TURINGPI_SSH_STRICT_HOST_KEY_CHECKING" \
+			-o UserKnownHostsFile=/etc/shutdown-controller/known_hosts \
+			-p "$RECOVERY_TURINGPI_SSH_PORT" \
+			"$RECOVERY_TURINGPI_USERNAME@$RECOVERY_TURINGPI_HOST" \
+			"$remote_command"; then
+			mqtt_publish_event "recovery_turingpi_power_on" "Turing Pi power on requested for $name" "ok" "recovery_powering_on" "turingpi_power_on"
+		else
+			log "failed to power on Turing Pi target $name slot=$slot"
+			mqtt_publish_event "recovery_turingpi_power_on_failed" "Failed to power on Turing Pi target $name" "warning" "recovery_powering_on" "turingpi_power_on_failed"
+			append_csv_state_value "recovery.power_targets.failed" "$name"
+			: >"$STATE_DIR/recovery_turingpi_failed"
+		fi
+	done
+
+	[ ! -f "$STATE_DIR/recovery_turingpi_failed" ]
+}
+
+power_on_recovery_targets() {
+	if [ -f "$STATE_DIR/recovery_power_on.done" ]; then
+		write_state_value "recovery.power_on.done" "true"
+		return 0
+	fi
+
+	set_controller_phase "recovery_powering_on"
+	log "requesting recovery power-on targets"
+	write_state_value "recovery.power_on.done" "false"
+	write_state_value "recovery.power_targets.total" "$(($(json_array_count_from_b64 "$RECOVERY_IPMI_TARGETS_B64") + $(json_array_count_from_b64 "$RECOVERY_TURINGPI_TARGETS_B64")))"
+	write_state_value "recovery.power_targets.failed" ""
+	write_state_value "recovery.power_targets.last" ""
+	write_state_value "recovery.power_targets.last_method" ""
+	if power_on_ipmi_targets && power_on_turingpi_targets; then
+		: >"$STATE_DIR/recovery_power_on.done"
+		write_state_value "recovery.power_on.done" "true"
+		set_last_action "recovery_power_on" "power" "ok"
+		return 0
+	fi
+
+	set_last_action "recovery_power_on" "power" "failed"
+	return 1
+}
+
+k8s_recovery_nodes_ready() {
+	nodes="$(printf '%s' "$RECOVERY_K8S_NODE_WAIT_TARGETS" | tr ',' '\n' | sed '/^[[:space:]]*$/d')"
+	write_state_value "recovery.k8s_wait_nodes.total" "$(printf '%s\n' "$nodes" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+	if [ -z "$nodes" ]; then
+		write_state_value "recovery.k8s_ready" "true"
+		write_state_value "recovery.k8s_not_ready_nodes" ""
+		return 0
+	fi
+	require_executable "$KUBECTL_BIN"
+
+	not_ready=""
+	rm -f "$STATE_DIR/recovery_nodes_not_ready"
+	printf '%s\n' "$nodes" | while IFS= read -r node; do
+		ready="$("$KUBECTL_BIN" get node "$node" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+		if [ "$ready" != "True" ]; then
+			printf '%s\n' "$node" >>"$STATE_DIR/recovery_nodes_not_ready"
+		fi
+	done
+	not_ready="$(sort -u "$STATE_DIR/recovery_nodes_not_ready" 2>/dev/null | paste -sd, - || true)"
+	rm -f "$STATE_DIR/recovery_nodes_not_ready"
+	write_state_value "recovery.k8s_not_ready_nodes" "$not_ready"
+	if [ -n "$not_ready" ]; then
+		write_state_value "recovery.k8s_ready" "false"
+		log "waiting for Kubernetes nodes to become Ready: $not_ready"
+		return 1
+	fi
+	write_state_value "recovery.k8s_ready" "true"
+	return 0
 }
 
 main() {
@@ -389,6 +594,20 @@ main() {
 				sleep "$RECOVERY_CHECK_INTERVAL_SECONDS"
 				continue
 			fi
+		fi
+
+		if ! power_on_recovery_targets; then
+			set_controller_phase "recovery_powering_on"
+			set_recovery_status "waiting" "power_on_failed" "$elapsed"
+			sleep "$RECOVERY_CHECK_INTERVAL_SECONDS"
+			continue
+		fi
+
+		if ! k8s_recovery_nodes_ready; then
+			set_controller_phase "recovery_waiting_nodes"
+			set_recovery_status "waiting" "k8s_nodes_not_ready" "$elapsed"
+			sleep "$RECOVERY_CHECK_INTERVAL_SECONDS"
+			continue
 		fi
 
 		if [ "$RECOVERY_REQUIRE_HEALTH_OK" = "true" ] && ! ceph_is_healthy; then

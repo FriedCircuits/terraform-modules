@@ -70,6 +70,8 @@ group:
       - binary_sensor.shutdown_controller_incident_active
       - binary_sensor.shutdown_controller_failure_active
       - binary_sensor.shutdown_controller_recovery_pending
+      - binary_sensor.shutdown_controller_recovery_power_on_done
+      - binary_sensor.shutdown_controller_recovery_k8s_ready
       - binary_sensor.shutdown_controller_needs_attention
       - sensor.shutdown_controller_ups_status
       - sensor.shutdown_controller_ups_runtime
@@ -96,6 +98,12 @@ group:
       - sensor.shutdown_controller_recovery_blocker
       - sensor.shutdown_controller_recovery_elapsed_seconds
       - sensor.shutdown_controller_recovery_elapsed_formatted
+      - sensor.shutdown_controller_recovery_power_targets_total
+      - sensor.shutdown_controller_recovery_power_targets_failed
+      - sensor.shutdown_controller_recovery_power_targets_last
+      - sensor.shutdown_controller_recovery_power_targets_last_method
+      - sensor.shutdown_controller_recovery_k8s_wait_nodes_total
+      - sensor.shutdown_controller_recovery_k8s_not_ready_nodes
       - sensor.shutdown_controller_last_event
       - sensor.shutdown_controller_last_event_at
       - sensor.shutdown_controller_last_message
@@ -137,4 +145,6 @@ automation:
             Failure: {{ states('sensor.shutdown_controller_failure_code') }}.
             Last action: {{ states('sensor.shutdown_controller_last_action') }} on {{ states('sensor.shutdown_controller_last_action_target') }}.
             Recovery blocker: {{ states('sensor.shutdown_controller_recovery_blocker') }}.
+            Failed power targets: {{ states('sensor.shutdown_controller_recovery_power_targets_failed') }}.
+            K8s not ready: {{ states('sensor.shutdown_controller_recovery_k8s_not_ready_nodes') }}.
             Last message: {{ states('sensor.shutdown_controller_last_message') }}.
