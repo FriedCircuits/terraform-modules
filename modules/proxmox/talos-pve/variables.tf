@@ -129,6 +129,22 @@ variable "default_disk_interface" {
   default     = "scsi0"
 }
 
+# Defaults mirror the vm module's own so behaviour is unchanged for existing
+# callers. Note they can't be null here: `nullable` defaults to true, so a null
+# would be passed through as null rather than falling back to the vm module's
+# default — silently changing the effective setting for everyone.
+variable "default_disk_ssd" {
+  description = "Whether the primary VM disk is flagged as SSD. Set false when the backing datastore is spinning rust — the flag advertises non-rotational behaviour and TRIM support to the guest. Overridable per instance via `disk_ssd`."
+  type        = bool
+  default     = true
+}
+
+variable "default_disk_discard" {
+  description = "Discard/TRIM mode for the primary VM disk (\"on\" or \"ignore\"). Overridable per instance via `disk_discard`."
+  type        = string
+  default     = "on"
+}
+
 variable "default_iso_storage" {
   description = "Default datastore used for the Talos ISO. Must allow `iso` content."
   type        = string

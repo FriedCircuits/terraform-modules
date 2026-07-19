@@ -33,11 +33,15 @@ locals {
         try(inst.description, null),
         format("%s %s", var.default_description_prefix, coalesce(try(inst.name, null), key))
       )
-      proxmox_node         = inst.proxmox_node
-      vm_id                = try(inst.vm_id, null)
-      iso_storage          = coalesce(try(inst.iso_storage, null), var.default_iso_storage)
-      disk_storage         = coalesce(try(inst.disk_storage, null), var.default_disk_storage)
-      disk_interface       = coalesce(try(inst.disk_interface, null), var.default_disk_interface)
+      proxmox_node   = inst.proxmox_node
+      vm_id          = try(inst.vm_id, null)
+      iso_storage    = coalesce(try(inst.iso_storage, null), var.default_iso_storage)
+      disk_storage   = coalesce(try(inst.disk_storage, null), var.default_disk_storage)
+      disk_interface = coalesce(try(inst.disk_interface, null), var.default_disk_interface)
+      # Not coalesce(): it treats `false` as absent, so a per-instance
+      # `disk_ssd = false` would be silently discarded in favour of the default.
+      disk_ssd             = try(inst.disk_ssd, null) != null ? inst.disk_ssd : var.default_disk_ssd
+      disk_discard         = try(inst.disk_discard, null) != null ? inst.disk_discard : var.default_disk_discard
       skip_iso_download    = local.instance_iso_settings[key].skip
       existing_iso_file_id = local.instance_iso_settings[key].iso_file_id
       vm_specs             = try(inst.vm_specs, null) != null ? inst.vm_specs : var.default_vm_specs
@@ -108,6 +112,8 @@ module "proxmox_vm" {
   vm_specs          = each.value.vm_specs
   disk_storage      = each.value.disk_storage
   disk_interface    = each.value.disk_interface
+  disk_ssd          = each.value.disk_ssd
+  disk_discard      = each.value.disk_discard
   iso_download      = each.value.iso_download
   iso_file_id       = each.value.iso_file_id
   network           = each.value.proxmox_network
