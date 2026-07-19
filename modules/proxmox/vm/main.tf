@@ -191,4 +191,27 @@ resource "proxmox_virtual_environment_vm" "this" {
   }
 
   tags = var.tags
+
+  # Editing cloud-init user_data force-replaces proxmox_virtual_environment_file
+  # (source_raw.data is ForceNew), which makes user_data_file_id "(known after
+  # apply)" and cascades into replacing this VM. That cascade is a phantom: the
+  # snippet's file name is deterministic and overwrite = true, so the resulting
+  # id string is byte-identical before and after — Terraform just can't prove it
+  # at plan time. The snippet is still rewritten on the host, so a rebuilt VM
+  # picks up the new config; a running one keeps its disk, which is what you
+  # want given cloud-init only runs at first boot anyway.
+  #
+  # Caveat: if you change cloud_init.user_data_name the id genuinely changes and
+  # is now ignored — use `terraform apply -replace` for that.
+  #
+  # This is deliberately not opt-in: ignore_changes takes a static list only, and
+  # the count-duplication workaround puts the two variants at different state
+  # addresses, so toggling the flag would plan a destroy+create of the VM rather
+  # than an attribute change. Consumers who do want a rebuild can run
+  # `terraform apply -replace=...` instead.
+  lifecycle {
+    ignore_changes = [
+      initialization[0].user_data_file_id,
+    ]
+  }
 }
