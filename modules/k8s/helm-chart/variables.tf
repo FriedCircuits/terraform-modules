@@ -89,3 +89,9 @@ variable "helm_values" {
   type        = any
   default     = {}
 }
+
+variable "helm_timeout" {
+  description = "Seconds helm waits for release resources to become ready before failing. Raised from the provider default of 300 because slow image pulls — notably first-time pulls onto arm64 nodes — routinely exceed 5 minutes, which fails the apply even though the workload comes up healthy moments later. Override higher per-stack for known-slow images."
+  type        = number
+  default     = 600
+}

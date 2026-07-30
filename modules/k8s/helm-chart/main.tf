@@ -50,6 +50,7 @@ resource "helm_release" "k8s" {
   chart      = var.chart
   version    = var.chart_version
   namespace  = var.namespace
+  timeout    = var.helm_timeout
 
   values = [
     local.values,
