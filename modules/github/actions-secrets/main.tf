@@ -13,6 +13,13 @@ resource "github_actions_secret" "secret" {
   plaintext_value = each.value
 }
 
+resource "github_actions_variable" "variable" {
+  for_each      = var.variables
+  repository    = var.repository
+  variable_name = each.key
+  value         = each.value
+}
+
 resource "github_actions_secret" "aws_key_id" {
   count           = var.create_aws_iam_user == true ? 1 : 0
   repository      = var.repository
