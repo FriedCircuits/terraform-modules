@@ -7,10 +7,10 @@ data "github_actions_public_key" "public_key" {
 }
 
 resource "github_actions_secret" "secret" {
-  for_each        = var.secrets
-  repository      = var.repository
-  secret_name     = each.key
-  plaintext_value = each.value
+  for_each    = var.secrets
+  repository  = var.repository
+  secret_name = each.key
+  value       = each.value
 }
 
 resource "github_actions_variable" "variable" {
@@ -21,17 +21,17 @@ resource "github_actions_variable" "variable" {
 }
 
 resource "github_actions_secret" "aws_key_id" {
-  count           = var.create_aws_iam_user == true ? 1 : 0
-  repository      = var.repository
-  secret_name     = "AWS_ACCESS_KEY_ID"
-  plaintext_value = aws_iam_access_key.github[0].id
+  count       = var.create_aws_iam_user == true ? 1 : 0
+  repository  = var.repository
+  secret_name = "AWS_ACCESS_KEY_ID"
+  value       = aws_iam_access_key.github[0].id
 }
 
 resource "github_actions_secret" "aws_key" {
-  count           = var.create_aws_iam_user == true ? 1 : 0
-  repository      = var.repository
-  secret_name     = "AWS_SECRET_ACCESS_KEY"
-  plaintext_value = aws_iam_access_key.github[0].secret
+  count       = var.create_aws_iam_user == true ? 1 : 0
+  repository  = var.repository
+  secret_name = "AWS_SECRET_ACCESS_KEY"
+  value       = aws_iam_access_key.github[0].secret
 }
 # https://terragrunt.gruntwork.io/docs/features/aws-auth/
 data "aws_iam_policy_document" "github" {
