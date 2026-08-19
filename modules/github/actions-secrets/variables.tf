@@ -64,3 +64,16 @@ variable "secrets" {
   description = "Map of secrets for github."
   type        = map(string)
 }
+
+variable "variables" {
+  description = <<-EOT
+    Map of Actions variables for the repository.
+
+    Unlike secrets these are stored in plain text, readable through the API and
+    the settings UI, and not masked in workflow logs. Use them for values that
+    are configuration rather than credentials -- a bucket name, a region, a
+    role ARN.
+  EOT
+  type        = map(string)
+  default     = {}
+}
