@@ -77,3 +77,39 @@ variable "variables" {
   type        = map(string)
   default     = {}
 }
+
+variable "environments" {
+  description = <<-EOT
+    Deployment environments to create on the repository, each with its own
+    secrets and variables, keyed by environment name.
+
+    Environment-scoped values are the way to give one workflow a different role,
+    account or region per environment without branching in YAML -- a job that
+    declares `environment: staging` sees the staging values under the same
+    names.
+
+    Protection rules are a separate matter. reviewers, wait_timer and
+    deployment_branch_policy are billing-gated on private repositories: on a
+    Free plan the API answers 422 with "Please ensure the billing plan supports
+    the required reviewers protection rule". They are optional here and unset by
+    default so an environment can be created on any plan; set them only where
+    the plan allows.
+  EOT
+  type = map(object({
+    secrets   = optional(map(string), {})
+    variables = optional(map(string), {})
+
+    wait_timer          = optional(number)
+    can_admins_bypass   = optional(bool)
+    prevent_self_review = optional(bool)
+
+    reviewer_user_ids = optional(list(number))
+    reviewer_team_ids = optional(list(number))
+
+    deployment_branch_policy = optional(object({
+      protected_branches     = bool
+      custom_branch_policies = bool
+    }))
+  }))
+  default = {}
+}

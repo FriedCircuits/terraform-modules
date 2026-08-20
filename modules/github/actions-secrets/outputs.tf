@@ -5,3 +5,8 @@ output "github_public_key" {
 output "aws_iam_user_arn" {
   value = try(aws_iam_user.github[0].arn, "no iam user")
 }
+
+output "environments" {
+  description = "Names of the deployment environments managed here"
+  value       = keys(github_repository_environment.environment)
+}
