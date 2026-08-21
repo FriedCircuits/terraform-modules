@@ -114,3 +114,84 @@ data "aws_iam_policy_document" "custom" {
     }
   }
 }
+
+# ---------------------------------------------------------------------------
+# Deployment environments
+# ---------------------------------------------------------------------------
+
+locals {
+  # Flattened so each secret and variable is its own resource. Keyed by
+  # environment and name together, because the same name legitimately appears in
+  # several environments -- that is the point of them.
+  environment_secrets = merge([
+    for env, cfg in var.environments : {
+      for name, value in cfg.secrets : "${env}/${name}" => {
+        environment = env
+        name        = name
+        value       = value
+      }
+    }
+  ]...)
+
+  environment_variables = merge([
+    for env, cfg in var.environments : {
+      for name, value in cfg.variables : "${env}/${name}" => {
+        environment = env
+        name        = name
+        value       = value
+      }
+    }
+  ]...)
+}
+
+resource "github_repository_environment" "environment" {
+  for_each = var.environments
+
+  repository  = var.repository
+  environment = each.key
+
+  wait_timer          = each.value.wait_timer
+  can_admins_bypass   = each.value.can_admins_bypass
+  prevent_self_review = each.value.prevent_self_review
+
+  # Billing-gated on private repositories. Leaving reviewer ids unset omits the
+  # block entirely, so the environment is created rather than rejected with 422.
+  dynamic "reviewers" {
+    for_each = (
+      try(length(each.value.reviewer_user_ids), 0) > 0 ||
+      try(length(each.value.reviewer_team_ids), 0) > 0
+    ) ? [1] : []
+
+    content {
+      users = try(each.value.reviewer_user_ids, null)
+      teams = try(each.value.reviewer_team_ids, null)
+    }
+  }
+
+  dynamic "deployment_branch_policy" {
+    for_each = each.value.deployment_branch_policy != null ? [each.value.deployment_branch_policy] : []
+
+    content {
+      protected_branches     = deployment_branch_policy.value.protected_branches
+      custom_branch_policies = deployment_branch_policy.value.custom_branch_policies
+    }
+  }
+}
+
+resource "github_actions_environment_secret" "secret" {
+  for_each = local.environment_secrets
+
+  repository  = var.repository
+  environment = github_repository_environment.environment[each.value.environment].environment
+  secret_name = each.value.name
+  value       = each.value.value
+}
+
+resource "github_actions_environment_variable" "variable" {
+  for_each = local.environment_variables
+
+  repository    = var.repository
+  environment   = github_repository_environment.environment[each.value.environment].environment
+  variable_name = each.value.name
+  value         = each.value.value
+}
