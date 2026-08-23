@@ -27,3 +27,9 @@ override.tf.json
 
 # Include tfplan files to ignore the plan output of command: terraform plan -out=tfplan
 # example: *tfplan*
+
+# Lock files. This repository holds reusable modules, not root configurations --
+# a module's lock file is meaningless to the configurations that consume it,
+# which resolve and lock providers themselves. They appear here only as a side
+# effect of running terraform inside a module directory to validate it.
+**/.terraform.lock.hcl

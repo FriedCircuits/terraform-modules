@@ -78,11 +78,14 @@ locals {
 }
 
 module "github_runner" {
-  for_each = { for repo in var.repos : repo.repo => repo }
+  # Keyed on the repository and its suffix, so one repository can have a scale
+  # set per architecture. An entry without a suffix keys and names exactly as it
+  # did before, so adding this changed no existing scale set.
+  for_each = { for repo in var.repos : "${repo.repo}${repo.name_suffix}" => repo }
   source   = "../helm-chart"
 
   helm_repo        = "oci://ghcr.io/actions/actions-runner-controller-charts"
-  name             = "${split("/", each.value.repo)[3]}-${split("/", each.value.repo)[4]}"
+  name             = "${split("/", each.value.repo)[3]}-${split("/", each.value.repo)[4]}${each.value.name_suffix}"
   chart            = "gha-runner-scale-set"
   namespace        = var.namespace
   create_namespace = false
@@ -93,7 +96,17 @@ module "github_runner" {
     githubConfigSecret = "github-token"
     maxRunners         = each.value.max
     minRunners         = each.value.min
-    template           = local.runner_template
+    # The module-wide template, with this entry's nodeSelector substituted where
+    # it sets one. Merged at the spec level rather than deeply: a nodeSelector
+    # is a whole answer to where a pod runs, and half of one is not useful.
+    template = each.value.node_selector == null ? local.runner_template : merge(
+      local.runner_template,
+      {
+        spec = merge(local.runner_template.spec, {
+          nodeSelector = each.value.node_selector
+        })
+      }
+    )
     containerMode = {
       type = "kubernetes"
       kubernetesModeWorkVolumeClaim = {
