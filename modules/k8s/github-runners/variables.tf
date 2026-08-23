@@ -92,6 +92,19 @@ variable "repos" {
     repo = string
     min  = number
     max  = number
+
+    # A second scale set for the same repository, distinguished by name. The
+    # scale set name is what a workflow puts in runs-on, so a repository that
+    # needs runners on more than one architecture needs more than one name.
+    #
+    # Empty by default, which reproduces exactly the name a single scale set
+    # has always had.
+    name_suffix = optional(string, "")
+
+    # Overrides the module-wide nodeSelector for this scale set only. The point
+    # of the suffix above: an arm64 entry beside an amd64 one, both for the same
+    # repository.
+    node_selector = optional(map(string))
   }))
   default = []
 }
