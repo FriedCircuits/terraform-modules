@@ -43,9 +43,13 @@ locals {
       serviceAccountName = var.service_account_name
       containers = var.service_account_name != null ? [
         {
-          name    = "runner"
-          image   = "ghcr.io/actions/actions-runner:latest"
-          command = ["/home/runner/run.sh"]
+          name = "runner"
+          # On the container, not beside it. A top-level `resources` key is not
+          # a value this chart has: it is accepted by Helm, rendered nowhere,
+          # and the pods come out with no requests at all.
+          resources = var.runner_resources
+          image     = "ghcr.io/actions/actions-runner:latest"
+          command   = ["/home/runner/run.sh"]
           env = [
             {
               name  = "ACTIONS_RUNNER_REQUIRE_JOB_CONTAINER"
@@ -119,7 +123,6 @@ module "github_runner" {
         }
       }
     }
-    resources = var.runner_resources
   })
 
   depends_on = [
@@ -175,18 +178,33 @@ resource "kubernetes_config_map" "gha_runner" {
     namespace = var.namespace
   }
   data = {
-    "default.yaml" = <<EOT
----
-apiVersion: v1
-kind: PodTemplate
-metadata:
-  name: runner-pod-template
-  labels:
-    app: runner-pod-template
-spec:
-  serviceAccountName: gha-runner
-  securityContext:
-    fsGroup: ${var.fs_group}
-EOT
+    # Rendered rather than written by hand: the job container is only named
+    # when there is something to say about it, and an empty `containers:` list
+    # would replace the hook's own definition with nothing.
+    "default.yaml" = yamlencode({
+      apiVersion = "v1"
+      kind       = "PodTemplate"
+      metadata = {
+        name   = "runner-pod-template"
+        labels = { app = "runner-pod-template" }
+      }
+      spec = merge(
+        {
+          serviceAccountName = "gha-runner"
+          securityContext    = { fsGroup = var.fs_group }
+        },
+        length(keys(var.workflow_resources)) == 0 ? {} : {
+          # `$job` is the name the container hook substitutes; any other name
+          # is added as a sidecar and the job container keeps its defaults.
+          containers = [
+            {
+              name      = "$job"
+              resources = var.workflow_resources
+            }
+          ]
+        }
+      )
+    })
   }
 }
+
