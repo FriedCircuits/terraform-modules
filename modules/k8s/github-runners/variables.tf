@@ -116,7 +116,24 @@ variable "controller_resources" {
 }
 
 variable "runner_resources" {
-  description = "Resources for the runner."
+  description = "Resources for the runner agent container."
+  type        = any
+  default     = {}
+}
+
+variable "workflow_resources" {
+  description = <<-EOT
+    Resources for the container a job actually runs in.
+
+    Separate from `runner_resources`: in kubernetes container mode each job
+    gets a second pod, and that is the one that compiles, tests and runs
+    browsers. The runner agent beside it only talks to the API.
+
+    Leaving this empty makes those pods BestEffort, which is the first thing
+    the kubelet kills when a node runs short -- so a heavy job is killed by
+    the pressure it caused, and the scheduler, having been told to reserve
+    nothing, is free to put the next one on the same node.
+  EOT
   type        = any
   default     = {}
 }
