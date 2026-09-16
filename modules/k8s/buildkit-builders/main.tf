@@ -13,7 +13,14 @@
 # `cleanup: false`) and gets a warm cache instead of a cold boot.
 
 locals {
-  builders = { for arch in var.architectures : arch => "${var.name_prefix}-${arch}" }
+  # Either an explicit map of builders, or the one-per-architecture shorthand.
+  builders = (
+    var.builders != null
+    ? var.builders
+    : { for arch in var.architectures : "${var.name_prefix}-${arch}" => {
+      node_selector = { "kubernetes.io/arch" = arch }
+    } }
+  )
 
   common_labels = merge(
     {
@@ -30,9 +37,9 @@ resource "kubernetes_config_map" "buildkitd" {
 
   metadata {
     # buildx names the StatefulSet `<builder>0`, and its config map after that.
-    name      = "${each.value}0-config"
+    name      = "${each.key}0-config"
     namespace = var.namespace
-    labels    = merge(local.common_labels, { "app" = "${each.value}0" })
+    labels    = merge(local.common_labels, { "app" = "${each.key}0" })
   }
 
   data = {
@@ -56,22 +63,22 @@ resource "kubernetes_stateful_set" "builder" {
   for_each = local.builders
 
   metadata {
-    name      = "${each.value}0"
+    name      = "${each.key}0"
     namespace = var.namespace
-    labels    = merge(local.common_labels, { "app" = "${each.value}0" })
+    labels    = merge(local.common_labels, { "app" = "${each.key}0" }, try(each.value.labels, null) != null ? each.value.labels : {})
   }
 
   spec {
     replicas     = 1
-    service_name = "${each.value}0"
+    service_name = "${each.key}0"
 
     selector {
-      match_labels = { "app" = "${each.value}0" }
+      match_labels = { "app" = "${each.key}0" }
     }
 
     template {
       metadata {
-        labels = merge(local.common_labels, { "app" = "${each.value}0" })
+        labels = merge(local.common_labels, { "app" = "${each.key}0" })
       }
 
       spec {
@@ -84,7 +91,7 @@ resource "kubernetes_stateful_set" "builder" {
           run_as_non_root        = false
         }
 
-        node_selector = { "kubernetes.io/arch" = each.key }
+        node_selector = try(each.value.node_selector, null) != null ? each.value.node_selector : {}
 
         container {
           name  = "buildkitd"
@@ -126,6 +133,7 @@ resource "kubernetes_stateful_set" "builder" {
               cpu    = var.resources.cpu
               memory = var.resources.memory
             }
+            limits = try(each.value.limits, null) != null ? each.value.limits : var.limits
           }
 
           volume_mount {
@@ -159,7 +167,7 @@ resource "kubernetes_stateful_set" "builder" {
 
         resources {
           requests = {
-            storage = var.state_storage
+            storage = try(each.value.storage_size, null) != null ? each.value.storage_size : var.state_storage
           }
         }
       }

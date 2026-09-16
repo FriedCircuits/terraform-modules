@@ -7,11 +7,36 @@ variable "namespace" {
   type        = string
 }
 
+variable "builders" {
+  description = <<-EOT
+    The builders to create, keyed by buildx builder name. The StatefulSet is
+    that key plus "0", which is buildx's own convention -- builder `shared-arm64`
+    is StatefulSet `shared-arm640`.
+
+    Naming matters more than it looks: the state PVC is derived from the
+    StatefulSet name, so keeping a name identical is what lets an existing cache
+    be reused. Renaming a builder starts it cold.
+
+    Leave it null for one builder per entry in `architectures`, which is the
+    common case.
+  EOT
+  type = map(object({
+    node_selector = optional(map(string))
+    storage_size  = optional(string)
+    labels        = optional(map(string))
+    limits        = optional(map(string))
+  }))
+  default = null
+}
+
 variable "architectures" {
   description = <<-EOT
-    One builder per architecture, each pinned to nodes of that arch. A build
-    targeting a platform has to run on a node of that platform unless you want
-    it emulated, which is slow enough to defeat the point.
+    Shorthand for the common case: one builder per architecture, named
+    `<name_prefix>-<arch>`, pinned to nodes of that arch. Ignored when
+    `builders` is set.
+
+    A build targeting a platform has to run on a node of that platform unless
+    you want it emulated, which is slow enough to defeat the point.
   EOT
   type        = list(string)
   default     = ["amd64", "arm64"]
@@ -63,8 +88,18 @@ variable "fs_group" {
   default     = 1000
 }
 
+variable "limits" {
+  description = <<-EOT
+    Optional limits for the builder pod. Empty by default and worth leaving
+    empty: a build throttled mid-layer, or OOM-killed part-way through, reads as
+    a flake rather than a resource problem.
+  EOT
+  type        = map(string)
+  default     = {}
+}
+
 variable "resources" {
-  description = "Requests for the builder pod. No limits: a build throttled or OOM-killed mid-layer looks like a flake."
+  description = "Requests for the builder pod."
   type = object({
     cpu    = string
     memory = string

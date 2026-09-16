@@ -3,6 +3,8 @@
 Long-lived rootless BuildKit builders, one per architecture, for CI jobs to
 attach to.
 
+One per architecture, which is the common case:
+
 ```hcl
 module "builders" {
   source = "git::.../modules/k8s/buildkit-builders?ref=vX.Y.Z"
@@ -14,8 +16,25 @@ module "builders" {
 }
 ```
 
-Produces `shared-amd640` and `shared-arm640` — buildx appends `0` to a builder
-name — each with its own PVC.
+Produces builders `shared-amd64` and `shared-arm64`, as StatefulSets
+`shared-amd640` and `shared-arm640` — buildx appends `0` to a builder name —
+each with its own PVC.
+
+Or name them yourself, which is what you want when adopting builders that
+already exist:
+
+```hcl
+  builders = {
+    "sarah-arm64" = {
+      node_selector = { "kubernetes.io/arch" = "arm64" }
+      labels        = { "app.kubernetes.io/part-of" = "sarah" }
+    }
+  }
+```
+
+**Keep a name identical when adopting one.** The state PVC is derived from the
+StatefulSet name (`state-<name>-0`), so an unchanged name reuses the existing
+cache. Renaming starts cold.
 
 ## Why declare them instead of letting buildx create them
 
