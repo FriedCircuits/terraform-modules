@@ -25,7 +25,7 @@ locals {
   )
 }
 
-resource "kubernetes_config_map" "buildkitd" {
+resource "kubernetes_config_map_v1" "buildkitd" {
   for_each = local.builders
 
   metadata {
@@ -52,7 +52,7 @@ resource "kubernetes_config_map" "buildkitd" {
   }
 }
 
-resource "kubernetes_stateful_set" "builder" {
+resource "kubernetes_stateful_set_v1" "builder" {
   for_each = local.builders
 
   metadata {
@@ -142,7 +142,7 @@ resource "kubernetes_stateful_set" "builder" {
         volume {
           name = "config"
           config_map {
-            name = kubernetes_config_map.buildkitd[each.key].metadata[0].name
+            name = kubernetes_config_map_v1.buildkitd[each.key].metadata[0].name
           }
         }
       }
