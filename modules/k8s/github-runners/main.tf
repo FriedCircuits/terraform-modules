@@ -171,6 +171,21 @@ resource "kubernetes_cluster_role_binding" "gha_runner_binding" {
   }
 }
 
+locals {
+  # The job container is described only when there is something to say about
+  # it: an empty `containers:` list would replace the hook's own definition
+  # with nothing.
+  workflow_container_fields = merge(
+    length(keys(var.workflow_resources)) == 0 ? {} : { resources = var.workflow_resources },
+    var.workflow_image_pull_policy == null ? {} : { imagePullPolicy = var.workflow_image_pull_policy },
+  )
+
+  workflow_container = length(keys(local.workflow_container_fields)) == 0 ? null : merge(
+    { name = "$job" },
+    local.workflow_container_fields,
+  )
+}
+
 resource "kubernetes_config_map" "gha_runner" {
   count = var.service_account_name != null && var.create_service_account ? 1 : 0
   metadata {
@@ -193,15 +208,10 @@ resource "kubernetes_config_map" "gha_runner" {
           serviceAccountName = "gha-runner"
           securityContext    = { fsGroup = var.fs_group }
         },
-        length(keys(var.workflow_resources)) == 0 ? {} : {
+        local.workflow_container == null ? {} : {
           # `$job` is the name the container hook substitutes; any other name
           # is added as a sidecar and the job container keeps its defaults.
-          containers = [
-            {
-              name      = "$job"
-              resources = var.workflow_resources
-            }
-          ]
+          containers = [local.workflow_container]
         }
       )
     })
