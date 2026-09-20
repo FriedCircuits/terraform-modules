@@ -121,6 +121,35 @@ variable "runner_resources" {
   default     = {}
 }
 
+variable "workflow_image_pull_policy" {
+  description = <<-EOT
+    imagePullPolicy for the container a job runs in.
+
+    In kubernetes container mode every job gets a fresh pod, so a job whose
+    workflow names a container image pays a registry pull unless the node
+    already holds that image. On a small cluster with a large CI image that
+    pull is most of the job: four minutes of pull for thirty seconds of work
+    is an ordinary result.
+
+    `IfNotPresent` makes the node's copy count. It is only safe where the
+    image is referenced immutably -- a digest, or a tag that is never moved --
+    because a node holding an older copy of a moving tag will keep using it.
+
+    Null leaves Kubernetes' own default, which is `Always` for `:latest` and
+    `IfNotPresent` for everything else.
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition = var.workflow_image_pull_policy == null || contains(
+      ["Always", "IfNotPresent", "Never"],
+      var.workflow_image_pull_policy
+    )
+    error_message = "workflow_image_pull_policy must be Always, IfNotPresent or Never."
+  }
+}
+
 variable "workflow_resources" {
   description = <<-EOT
     Resources for the container a job actually runs in.
