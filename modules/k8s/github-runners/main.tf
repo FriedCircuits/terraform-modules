@@ -208,6 +208,11 @@ resource "kubernetes_config_map" "gha_runner" {
           serviceAccountName = "gha-runner"
           securityContext    = { fsGroup = var.fs_group }
         },
+        # Only when there are any: an empty list is a field the hook then has
+        # to reconcile against its own default for no reason.
+        length(var.image_pull_secrets) == 0 ? {} : {
+          imagePullSecrets = [for name in var.image_pull_secrets : { name = name }]
+        },
         local.workflow_container == null ? {} : {
           # `$job` is the name the container hook substitutes; any other name
           # is added as a sidecar and the job container keeps its defaults.
