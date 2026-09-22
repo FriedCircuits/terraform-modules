@@ -123,19 +123,10 @@ variable "runner_resources" {
 
 variable "image_pull_secrets" {
   description = <<-EOT
-    Names of image pull secrets to attach to the pod a job runs in.
-
-    A job image in a private registry needs credentials the pod can read, and
-    the pod template is the only place to put them: the container hook builds
-    that pod, so a secret attached to the runner's service account elsewhere
-    does not reach it.
-
-    The secrets must already exist in the runner namespace. A registry whose
-    credentials expire -- ECR's last twelve hours -- needs something refreshing
-    them on a schedule; this module does not do that.
-
-    Empty attaches none, which is right for a public registry or one the nodes
-    are already authenticated to.
+    Image pull secrets for the pod a job runs in. The container hook builds
+    that pod from this template, so a secret on the runner's service account
+    does not reach it. They must already exist in the namespace, and anything
+    that expires needs refreshing elsewhere.
   EOT
   type        = list(string)
   default     = []
