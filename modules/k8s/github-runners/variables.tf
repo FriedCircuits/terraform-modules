@@ -121,6 +121,17 @@ variable "runner_resources" {
   default     = {}
 }
 
+variable "image_pull_secrets" {
+  description = <<-EOT
+    Image pull secrets for the pod a job runs in. The container hook builds
+    that pod from this template, so a secret on the runner's service account
+    does not reach it. They must already exist in the namespace, and anything
+    that expires needs refreshing elsewhere.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "workflow_image_pull_policy" {
   description = <<-EOT
     imagePullPolicy for the container a job runs in.
