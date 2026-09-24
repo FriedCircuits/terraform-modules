@@ -180,20 +180,12 @@ variable "workflow_resources" {
 
 variable "workflow_topology_spread_constraints" {
   description = <<-EOT
-    Topology spread constraints for the pod a job runs in. Empty by default,
-    which leaves the scheduler to place jobs by resource requests alone.
+    Topology spread constraints for the pod a job runs in. Empty by default.
 
-    That is the problem this exists for. A job pod's CPU request is usually a
-    fraction of what the job actually uses -- the request only has to be big
-    enough to schedule -- so the scheduler believes several will fit on one
-    node and packs them there. They then starve each other, and the symptoms
-    do not look like scheduling: tests that pass in seconds time out, the
-    kubelet slows enough to fail pod creation, and admission starts refusing
-    pods for memory while other nodes sit idle.
-
-    Prefer `whenUnsatisfiable: ScheduleAnyway`. A hard constraint makes a job
-    wait for a particular node instead of running slowly on a busy one, which
-    trades a job that is late for a job that never starts.
+    A job's CPU request is usually a fraction of what it uses, so the
+    scheduler packs several onto one node and they starve each other. Prefer
+    `whenUnsatisfiable: ScheduleAnyway`; a hard constraint trades a late job
+    for one that never starts.
   EOT
   type        = list(any)
   default     = []
