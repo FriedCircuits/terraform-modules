@@ -11,10 +11,14 @@ ver = $(shell cat VERSION)
 # asks for a message interactively and aborts with "no tag message?" and exit
 # 128 when the buffer is left empty -- which reads like a signing failure and is
 # not one. The tag message matches the release title.
+# Tags origin/main, not the current branch: a squash merge leaves the branch
+# commit off main, and v1.5.0 was cut from one. No `git pull` either -- it ran
+# on the merged branch, whose upstream is gone once the PR deletes it.
 release:
 	@[ -n "$(name)" ] || { echo 'name is required, e.g. make release name="Short description"'; exit 1; }
 	@[ -n "$(ver)" ] || { echo 'VERSION is empty -- refusing to tag. Check that VERSION exists and that make can read it.'; exit 1; }
-	git tag $(ver) -s -m "$(ver) $(name)"
-	git push --tags
-	git pull
+	@git rev-parse -q --verify "refs/tags/$(ver)" >/dev/null && { echo 'Tag $(ver) already exists. Bump VERSION, or delete the tag to recut.'; exit 1; } || true
+	git fetch origin main --tags
+	git tag $(ver) -s -m "$(ver) $(name)" origin/main
+	git push origin refs/tags/$(ver)
 	gh release create $(ver) --title "$(ver) $(name)" --generate-notes
