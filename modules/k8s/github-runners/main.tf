@@ -216,6 +216,9 @@ resource "kubernetes_config_map" "gha_runner" {
           # `$job` is the name the container hook substitutes; any other name
           # is added as a sidecar and the job container keeps its defaults.
           containers = [local.workflow_container]
+        },
+        length(var.workflow_topology_spread_constraints) == 0 ? {} : {
+          topologySpreadConstraints = var.workflow_topology_spread_constraints
         }
       )
     })
