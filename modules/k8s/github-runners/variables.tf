@@ -177,3 +177,16 @@ variable "workflow_resources" {
   type        = any
   default     = {}
 }
+
+variable "workflow_topology_spread_constraints" {
+  description = <<-EOT
+    Topology spread constraints for the pod a job runs in. Empty by default.
+
+    A job's CPU request is usually a fraction of what it uses, so the
+    scheduler packs several onto one node and they starve each other. Prefer
+    `whenUnsatisfiable: ScheduleAnyway`; a hard constraint trades a late job
+    for one that never starts.
+  EOT
+  type        = list(any)
+  default     = []
+}
