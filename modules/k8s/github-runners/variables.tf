@@ -127,6 +127,14 @@ variable "image_pull_secrets" {
     that pod from this template, so a secret on the runner's service account
     does not reach it. They must already exist in the namespace, and anything
     that expires needs refreshing elsewhere.
+
+    This REPLACES the hook's own list rather than adding to it. The hook
+    creates a registry credential per runner, under a name that is a fresh
+    hash each time, so it cannot be named here and added back. Set this only
+    once every image a job pulls is reachable with these secrets alone --
+    otherwise the job pod pulls anonymously, fails to authorize, and never
+    starts, which the runner reports as a null job pod rather than as a
+    registry error.
   EOT
   type        = list(string)
   default     = []
