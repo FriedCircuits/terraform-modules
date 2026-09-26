@@ -50,7 +50,7 @@ locals {
           resources = var.runner_resources
           image     = "ghcr.io/actions/actions-runner:latest"
           command   = ["/home/runner/run.sh"]
-          env = [
+          env = concat([
             {
               name  = "ACTIONS_RUNNER_REQUIRE_JOB_CONTAINER"
               value = "false"
@@ -59,7 +59,7 @@ locals {
               name  = "ACTIONS_RUNNER_CONTAINER_HOOK_TEMPLATE"
               value = "/home/runner/pod-templates/default.yaml"
             }
-          ]
+          ], var.runner_extra_env)
           volumeMounts = [
             {
               name      = "pod-templates"
