@@ -190,3 +190,12 @@ variable "workflow_topology_spread_constraints" {
   type        = list(any)
   default     = []
 }
+
+variable "runner_extra_env" {
+  description = "Extra env for the runner container, e.g. ACTIONS_RUNNER_PREPARE_JOB_TIMEOUT_SECONDS."
+  type = list(object({
+    name  = string
+    value = string
+  }))
+  default = []
+}
