@@ -43,8 +43,8 @@ module "bucket" {
   bucket_name       = var.bucket_name
   versioning_status = "Enabled"
   cleanup_rules = {
-    backup-cleanup = {
-      prefix          = "backups/"
+    version-cleanup = {
+      prefix          = "data/"
       noncurrent_days = 2
     }
   }
