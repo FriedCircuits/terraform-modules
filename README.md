@@ -1,6 +1,9 @@
 # Terraform Modules
 Hodgepodge of Terraform modules.
 
+* IDrive
+   * [e2 Bucket](modules/idrive/e2-bucket) - Create or import buckets with optional versioning and old-version cleanup
+
 * Talos
    * [Machine Config](modules/talos/machine-config) - Apply an existing-cluster configuration to one Talos node
 
