@@ -1,6 +1,9 @@
 # Terraform Modules
 Hodgepodge of Terraform modules.
 
+* Talos
+   * [Machine Config](modules/talos/machine-config) - Apply an existing-cluster configuration to one Talos node
+
 * Github
    * Actions Secrets - Deploys secrets to Github Actions. (AWS IAM User option)
 
