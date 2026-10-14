@@ -105,6 +105,10 @@ variable "repos" {
     # of the suffix above: an arm64 entry beside an amd64 one, both for the same
     # repository.
     node_selector = optional(map(string))
+
+    # Overrides the module-wide service account for this scale set only, e.g. a
+    # read-only identity for jobs that should never hold the default one.
+    service_account_name = optional(string)
   }))
   default = []
 }
