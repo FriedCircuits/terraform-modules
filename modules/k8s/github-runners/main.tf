@@ -100,17 +100,16 @@ module "github_runner" {
     githubConfigSecret = "github-token"
     maxRunners         = each.value.max
     minRunners         = each.value.min
-    # The module-wide template, with this entry's nodeSelector substituted where
-    # it sets one. Merged at the spec level rather than deeply: a nodeSelector
-    # is a whole answer to where a pod runs, and half of one is not useful.
-    template = each.value.node_selector == null ? local.runner_template : merge(
-      local.runner_template,
-      {
-        spec = merge(local.runner_template.spec, {
-          nodeSelector = each.value.node_selector
-        })
-      }
-    )
+    # The module-wide template, with this entry's nodeSelector and service account
+    # substituted where it sets them. Merged at the spec level rather than deeply:
+    # a nodeSelector is a whole answer to where a pod runs.
+    template = merge(local.runner_template, {
+      spec = merge(
+        local.runner_template.spec,
+        each.value.node_selector == null ? {} : { nodeSelector = each.value.node_selector },
+        each.value.service_account_name == null ? {} : { serviceAccountName = each.value.service_account_name },
+      )
+    })
     containerMode = {
       type = "kubernetes"
       kubernetesModeWorkVolumeClaim = {
