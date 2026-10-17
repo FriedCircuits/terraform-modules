@@ -88,12 +88,19 @@ variable "environments" {
     declares `environment: staging` sees the staging values under the same
     names.
 
-    Protection rules are a separate matter. reviewers, wait_timer and
-    deployment_branch_policy are billing-gated on private repositories: on a
-    Free plan the API answers 422 with "Please ensure the billing plan supports
-    the required reviewers protection rule". They are optional here and unset by
-    default so an environment can be created on any plan; set them only where
-    the plan allows.
+    Protection rules are a separate matter. Required reviewers and wait_timer
+    are billing-gated on private repositories: on a Free plan the API answers
+    422 with "Please ensure the billing plan supports the required reviewers
+    protection rule". They are optional here and unset by default so an
+    environment can be created on any plan; set them only where the plan
+    allows.
+
+    A deployment branch policy is not gated. deployment_branch_patterns names
+    the branches (fnmatch patterns, e.g. "main") that may deploy to the
+    environment, and turns on custom_branch_policies for you: a job on any
+    other branch that declares the environment is refused before it starts,
+    and never sees the environment's secrets. Leave it empty to allow every
+    branch, or set deployment_branch_policy yourself for protected branches.
   EOT
   type = map(object({
     secrets   = optional(map(string), {})
@@ -110,6 +117,16 @@ variable "environments" {
       protected_branches     = bool
       custom_branch_policies = bool
     }))
+
+    deployment_branch_patterns = optional(list(string), [])
   }))
   default = {}
+
+  validation {
+    condition = alltrue([
+      for cfg in values(var.environments) :
+      length(cfg.deployment_branch_patterns) == 0 || cfg.deployment_branch_policy == null
+    ])
+    error_message = "Set deployment_branch_patterns or deployment_branch_policy for an environment, not both."
+  }
 }
