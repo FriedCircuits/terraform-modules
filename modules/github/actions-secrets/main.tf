@@ -169,13 +169,34 @@ resource "github_repository_environment" "environment" {
   }
 
   dynamic "deployment_branch_policy" {
-    for_each = each.value.deployment_branch_policy != null ? [each.value.deployment_branch_policy] : []
+    for_each = (
+      length(each.value.deployment_branch_patterns) > 0
+      ? [{ protected_branches = false, custom_branch_policies = true }]
+      : each.value.deployment_branch_policy != null ? [each.value.deployment_branch_policy] : []
+    )
 
     content {
       protected_branches     = deployment_branch_policy.value.protected_branches
       custom_branch_policies = deployment_branch_policy.value.custom_branch_policies
     }
   }
+}
+
+# custom_branch_policies alone admits no branch at all; each pattern here is
+# one that may deploy.
+resource "github_repository_environment_deployment_policy" "branch" {
+  for_each = merge([
+    for env, cfg in var.environments : {
+      for pattern in cfg.deployment_branch_patterns : "${env}/${pattern}" => {
+        environment = env
+        pattern     = pattern
+      }
+    }
+  ]...)
+
+  repository     = var.repository
+  environment    = github_repository_environment.environment[each.value.environment].environment
+  branch_pattern = each.value.pattern
 }
 
 resource "github_actions_environment_secret" "secret" {
