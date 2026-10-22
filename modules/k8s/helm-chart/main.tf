@@ -52,9 +52,10 @@ resource "helm_release" "k8s" {
   namespace  = var.namespace
   timeout    = var.helm_timeout
 
-  values = [
-    local.values,
-  ]
+  values = concat(
+    [local.values],
+    nonsensitive(length(var.helm_sensitive_values) > 0) ? [yamlencode(var.helm_sensitive_values)] : [],
+  )
 
   depends_on = [
     kubernetes_namespace.namespace,
