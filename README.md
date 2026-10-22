@@ -19,7 +19,6 @@ Hodgepodge of Terraform modules.
     * Get Join        - Get join config from Kuberenetes control plane
     * Github Runners  - Deploy Github self-hosted runners
     * Helm Chart      - Deploy any helm chart
-    * K8s-At-Home     - Deploy a chart from the k8s-at-home helm repo
     * Traefik Ingress - Creats Ingress CRDs for host based routing
 
 * JumpCloud
