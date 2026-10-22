@@ -54,6 +54,7 @@ resource "helm_release" "k8s" {
 
   values = [
     local.values,
+    yamlencode(var.helm_sensitive_values),
   ]
 
   depends_on = [

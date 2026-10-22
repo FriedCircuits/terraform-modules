@@ -90,6 +90,13 @@ variable "helm_values" {
   default     = {}
 }
 
+variable "helm_sensitive_values" {
+  description = "Helm values holding secrets, hidden from plan output. Deep-merged over helm_values by Helm; lists are replaced, not merged."
+  type        = any
+  default     = {}
+  sensitive   = true
+}
+
 variable "helm_timeout" {
   description = "Seconds helm waits for release resources to become ready before failing. Raised from the provider default of 300 because slow image pulls — notably first-time pulls onto arm64 nodes — routinely exceed 5 minutes, which fails the apply even though the workload comes up healthy moments later. Override higher per-stack for known-slow images."
   type        = number
